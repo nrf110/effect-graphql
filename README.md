@@ -55,6 +55,34 @@ const schema = await builder.build({
 
 ## Core Concepts
 
+### Effect Schema Integration
+
+Define your types once with Effect Schema and derive both TypeScript types and GraphQL types:
+
+```typescript
+import { Schema as S } from "effect"
+import { toGraphQLObjectType } from "effect-graphql"
+
+// Define schema
+const UserSchema = S.Struct({
+  id: S.Number,
+  name: S.String,
+  email: S.String,
+})
+
+// Derive TypeScript type
+type User = S.Schema.Type<typeof UserSchema>
+
+// Derive GraphQL type
+const UserType = toGraphQLObjectType("User", UserSchema)
+```
+
+This approach gives you:
+- Single source of truth for your data models
+- Automatic validation with Effect Schema
+- Type safety across your entire stack
+- No manual GraphQL type definitions
+
 ### Effect Resolvers
 
 Resolvers are Effect programs that can access services, handle errors, and compose with other Effects:
