@@ -173,7 +173,7 @@ import { objectType } from "effect-graphql"
 // Create User type with a relational orders field
 const UserTypeBuilder = objectType<User, AppLayer>("User", UserSchema)
   .field("orders", {
-    type: new GraphQLList(OrderType),
+    typeSchema: S.Array(OrderSchema), // Use Effect Schema for type
     argsSchema: S.Struct({
       startDate: S.optional(S.String),
       endDate: S.optional(S.String),
@@ -194,17 +194,79 @@ builder.registerObjectType(UserTypeBuilder)
 const UserType = UserTypeBuilder.build()
 ```
 
+You can use either:
+- `typeSchema`: Effect Schema (recommended) - automatically converts to GraphQL type
+- `type`: GraphQL type directly - for more control or custom types
+
 This enables:
 - Field-level resolvers with access to parent object
 - Arguments on nested fields (e.g., filtering, pagination)
 - Full Effect integration with services and error handling
 - Type-safe parent and argument types
 
+### Class-Based Types
+
+For a more object-oriented approach, use `createGraphQLClass` to define types with computed fields:
+
+```typescript
+import { createGraphQLClass } from "effect-graphql"
+
+// Define User class with schema and computed fields
+class User extends createGraphQLClass(
+  {
+    id: S.Number,
+    name: S.String,
+    email: S.String,
+  },
+  {
+    // Computed field with arguments
+    orders: {
+      typeSchema: S.Array(OrderSchema),
+      argsSchema: S.Struct({
+        startDate: S.optional(S.String),
+        endDate: S.optional(S.String),
+      }),
+      description: "Get orders for this user",
+      resolve: (parent, args) =>
+        Effect.gen(function* () {
+          const orderService = yield* OrderService
+          return yield* orderService.getOrdersForUser(
+            parent.id,
+            args.startDate,
+            args.endDate
+          )
+        }),
+    },
+    // Simple computed field
+    displayName: {
+      typeSchema: S.String,
+      resolve: (parent) => Effect.succeed(`${parent.name} (${parent.email})`),
+    },
+  }
+) {
+  declare id: number
+  declare name: string
+  declare email: string
+}
+
+// Convert to ObjectTypeBuilder
+const UserTypeBuilder = (User as any).toObjectTypeBuilder("User")
+builder.registerObjectType(UserTypeBuilder)
+const UserType = UserTypeBuilder.build()
+```
+
+This approach:
+- Groups schema fields and computed fields together
+- Provides a class-based API similar to Effect Schema's Class
+- Maintains full type safety and Effect integration
+- Works well for domain-driven design
+
 ## Examples
 
 - `examples/basic-server.ts` - Basic queries and mutations with validation
 - `examples/schema-validation.ts` - Advanced validation with Effect Schema
 - `examples/relational-fields.ts` - Relational fields with arguments (User → Orders)
+- `examples/class-based.ts` - Class-based type definitions with computed fields
 
 ## License
 

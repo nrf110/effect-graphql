@@ -21,10 +21,14 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "effect": "^3.0.0",
+    "effect": "^3.19.11",
     "graphql": "^16.0.0",
     "typescript": "^5.3.0"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@effect/platform": "^0.93.8",
+    "@effect/platform-node": "^0.103.0",
+    "reflect-metadata": "^0.2.2"
+  },
   "license": "MIT"
 }

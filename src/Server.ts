@@ -1,15 +1,24 @@
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
+import * as S from "effect/Schema"
+import { HttpPlatform, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform"
+import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
 import { graphql, GraphQLSchema } from "graphql"
-import type { IncomingMessage, ServerResponse } from "http"
+import path from "path"
+import { createServer } from "node:http"
 
-/**
- * GraphQL request payload
- */
-export interface GraphQLRequest {
-  query: string
-  variables?: Record<string, unknown>
-  operationName?: string
-}
+
+const GraphQLRequestSchema = S.Struct({
+  query: S.String,
+  variables: S.optional(S.Record({
+    key: S.String, 
+    value: S.Any,
+  })),
+  operationName: S.optional(S.String),
+})
+
+type GraphQLRequest = S.Schema.Type<typeof GraphQLRequestSchema>
+
+const parseGraphQLRequest = HttpServerRequest.schemaBodyJson(GraphQLRequestSchema)
 
 /**
  * Execute a GraphQL query with Effect integration
@@ -31,42 +40,39 @@ export const executeQuery = (
     catch: (error) => new Error(String(error)),
   })
 
-/**
- * Create a simple HTTP handler for Node.js/Bun
- */
-export const createHttpHandler = (
-  schema: GraphQLSchema
-) => {
-  return async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.method !== "POST") {
-      res.writeHead(405, { "Content-Type": "application/json" })
-      res.end(JSON.stringify({ error: "Method not allowed" }))
-      return
-    }
+const router = (schema: GraphQLSchema) => HttpRouter.empty.pipe(
+  HttpRouter.get("/_graphiql", HttpServerResponse.file(path.join(__dirname, 'assets', "index.html"))),
+  HttpRouter.post("/graphql", Effect.gen(function* () {
+    const req = yield* HttpServerRequest.HttpServerRequest
+    const body = yield* parseGraphQLRequest
+    executeQuery(schema, body)
+    return HttpServerResponse.text("Hello, world!")
+  }))
+)
 
-    let body = ""
-    req.on("data", (chunk) => {
-      body += chunk.toString()
-    })
+// TODO: add schema
+const app = router(new GraphQLSchema({})).pipe(
+  Effect.catchAllCause((cause) =>
+    HttpServerResponse.text(JSON.stringify({ error: cause }), { status: 500 })
+  ),
+  HttpServer.serve()
+)
 
-    req.on("end", async () => {
-      try {
-        const request: GraphQLRequest = JSON.parse(body)
-        
-        const result = await Effect.runPromise(
-          executeQuery(schema, request)
-        )
+const listen = (
+  app: Layer.Layer<
+    never,
+    never,
+    HttpPlatform.HttpPlatform | HttpServer.HttpServer
+  >,
+  port: number
+) =>
+  NodeRuntime.runMain(
+    Layer.launch(
+      Layer.provide(
+        app,
+        NodeHttpServer.layer(() => createServer(), { port })
+      )
+    )
+  )
 
-        res.writeHead(200, { "Content-Type": "application/json" })
-        res.end(JSON.stringify(result))
-      } catch (error) {
-        res.writeHead(400, { "Content-Type": "application/json" })
-        res.end(
-          JSON.stringify({
-            error: error instanceof Error ? error.message : "Bad request",
-          })
-        )
-      }
-    })
-  }
-}
+listen(app, 11001)

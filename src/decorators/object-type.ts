@@ -1,4 +1,9 @@
-import { Class, Struct } from "effect/Schema"
+import { flatMap, fromNullable, filter, getOrElse, type Option } from "effect/Option"
+import { Struct, TypeId } from "effect/Schema"
+import * as SchemaAST from "effect/SchemaAST"
+import { schemaBuilder } from "../builder"
+import { GraphQLBoolean, GraphQLEnumType, GraphQLFieldConfig, GraphQLFieldConfigMap, GraphQLInt, GraphQLList, GraphQLObjectType, GraphQLString, GraphQLType, GraphQLUnionType } from "graphql"
+import { getIdentifierAnnotation } from "effect/SchemaAST"
 
 /**
  * Type constraint for classes that implement Effect's Class interface.
@@ -35,7 +40,92 @@ type ClassLike = {
  */
 export function ObjectType() {
   return <T extends ClassLike>(target: T): T => {
-    // Decorator implementation - you can add metadata or other logic here
+    schemaBuilder.addType(toGraphqlObjectType(target))
     return target
   }
+}
+
+function toGraphqlObjectType<T extends ClassLike>(schema: T): GraphQLObjectType {
+    return new GraphQLObjectType({
+        name: schema.identifier,
+        fields: toGraphqlFields(schema),
+    })
+}
+
+function toGraphqlFields<T extends ClassLike>(schema: T): GraphQLFieldConfigMap<any, any> {
+    return Object.fromEntries(
+        Object.entries(schema.fields).map(([name, field]) => [name, toGraphqlField(field)]),
+    )
+}
+
+function toGraphqlField(field: Struct.Field): GraphQLFieldConfig<any, any> {
+    let ast: SchemaAST.AST
+
+    const getTypeName = (ast: SchemaAST.AST) => SchemaAST.getIdentifierAnnotation(ast).pipe(
+        getOrElse(() => field[TypeId].toString())
+    )
+
+    if (field.ast instanceof SchemaAST.PropertySignature) {
+        ast = field.ast.type
+    } else {
+        ast = field.ast as SchemaAST.AST
+    }
+
+    return toGraphQLType(ast, getTypeName)
+}
+
+function toGraphQLType(ast: SchemaAST.AST, getTypeName: (ast: SchemaAST.AST) => string): GraphQLFieldConfig<any, any> | undefined {
+    if (SchemaAST.isEnums(ast)) {        
+        return {
+            type: new GraphQLEnumType({
+                name: getTypeName(ast),
+                values: Object.fromEntries(ast.enums.map(([name, value]) => [name, { value }])),
+            }),
+        }
+    }    
+    if (SchemaAST.isStringKeyword(ast) || SchemaAST.isSymbolKeyword(ast)) {
+        return {
+            type: GraphQLString,
+        }
+    }
+    if (SchemaAST.isNumberKeyword(ast) || SchemaAST.isBigIntKeyword(ast)) {
+        return {
+            type: GraphQLInt,
+        }
+    }
+    if (SchemaAST.isBooleanKeyword(ast)) {
+        return {
+            type: GraphQLBoolean,
+        }
+    }
+    if (SchemaAST.isSuspend(ast)) {
+        return toGraphQLType(ast.f(), getTypeName)
+    }
+    if (SchemaAST.isTypeLiteral(ast)) {
+        return {
+            type: new GraphQLObjectType({
+                name: getTypeName(ast),
+                fields: toGraphqlFields(ast),
+            }),
+        }
+    }
+    if (SchemaAST.isUnion(ast)) {        
+        return {
+            type: new GraphQLUnionType({
+                name: getTypeName(ast),
+                types: () => ast.types.flatMap(type => findGraphQLObjectType(type).pipe(
+                    getOrElse(() => []),
+                )),
+            }),
+        }
+    }
+    return undefined
+}
+
+function findGraphQLObjectType(ast: SchemaAST.AST): Option<GraphQLObjectType> {
+    return getIdentifierAnnotation(ast).pipe(
+        flatMap(name => 
+            fromNullable(schemaBuilder.getType(name))),
+        filter(type => type instanceof GraphQLObjectType)
+    )    
 }
