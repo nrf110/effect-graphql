@@ -1,4 +1,4 @@
-import { Effect } from "effect/Effect"
+import { Effect } from "effect"
 import * as S from "effect/Schema"
 import * as AST from "effect/SchemaAST"
 import {
@@ -17,6 +17,31 @@ import {
 } from "graphql"
 
 /**
+ * Check if a number AST node represents an integer
+ */
+const isIntegerType = (ast: AST.AST): boolean => {
+  // Check for Refinement with integer filter
+  if (ast._tag === "Refinement") {
+    const refinement = ast as any
+
+    // S.Int uses a filter with a specific predicate
+    // Check the annotations for the integer identifier
+    const annotations = refinement.annotations
+    if (annotations) {
+      // Check for identifier annotation
+      const identifier = AST.getIdentifierAnnotation(refinement)
+      if (identifier._tag === "Some" && identifier.value === "Int") {
+        return true
+      }
+    }
+
+    // Recursively check the base type
+    return isIntegerType(refinement.from)
+  }
+  return false
+}
+
+/**
  * Convert an Effect Schema to a GraphQL output type
  */
 export const toGraphQLType = (schema: S.Schema<any, any, any>): GraphQLOutputType => {
@@ -27,10 +52,22 @@ export const toGraphQLType = (schema: S.Schema<any, any, any>): GraphQLOutputTyp
   if (ast._tag === "NumberKeyword") return GraphQLFloat
   if (ast._tag === "BooleanKeyword") return GraphQLBoolean
 
+  // Handle refinements (e.g., S.Int)
+  if (ast._tag === "Refinement") {
+    if (isIntegerType(ast)) {
+      return GraphQLInt
+    }
+    // For other refinements, use the base type
+    return toGraphQLType(S.make((ast as any).from))
+  }
+
   // Handle literals
   if (ast._tag === "Literal") {
     if (typeof ast.literal === "string") return GraphQLString
-    if (typeof ast.literal === "number") return GraphQLFloat
+    if (typeof ast.literal === "number") {
+      // Check if it's an integer literal
+      return Number.isInteger(ast.literal) ? GraphQLInt : GraphQLFloat
+    }
     if (typeof ast.literal === "boolean") return GraphQLBoolean
   }
 
@@ -61,7 +98,7 @@ export const toGraphQLType = (schema: S.Schema<any, any, any>): GraphQLOutputTyp
     }
 
     // Generate a name from the schema or use a default
-    const typeName = (schema as any).annotations?.identifier || `Object_${Math.random().toString(36).substr(2, 9)}`
+    const typeName = (schema as any).annotations?.identifier || `Object_${Math.random().toString(36).slice(2, 11)}`
     
     return new GraphQLObjectType({
       name: typeName,
@@ -97,10 +134,22 @@ export const toGraphQLInputType = (schema: S.Schema<any, any, any>): GraphQLInpu
   if (ast._tag === "NumberKeyword") return GraphQLFloat
   if (ast._tag === "BooleanKeyword") return GraphQLBoolean
 
+  // Handle refinements (e.g., S.Int)
+  if (ast._tag === "Refinement") {
+    if (isIntegerType(ast)) {
+      return GraphQLInt
+    }
+    // For other refinements, use the base type
+    return toGraphQLInputType(S.make((ast as any).from))
+  }
+
   // Handle literals
   if (ast._tag === "Literal") {
     if (typeof ast.literal === "string") return GraphQLString
-    if (typeof ast.literal === "number") return GraphQLFloat
+    if (typeof ast.literal === "number") {
+      // Check if it's an integer literal
+      return Number.isInteger(ast.literal) ? GraphQLInt : GraphQLFloat
+    }
     if (typeof ast.literal === "boolean") return GraphQLBoolean
   }
 
@@ -130,7 +179,7 @@ export const toGraphQLInputType = (schema: S.Schema<any, any, any>): GraphQLInpu
       fields[fieldName] = { type: fieldType }
     }
 
-    const typeName = (schema as any).annotations?.identifier || `Input_${Math.random().toString(36).substr(2, 9)}`
+    const typeName = (schema as any).annotations?.identifier || `Input_${Math.random().toString(36).slice(2, 11)}`
     
     return new GraphQLInputObjectType({
       name: typeName,
