@@ -1,7 +1,7 @@
 import { Effect, Layer, Runtime, Pipeable } from "effect"
 import * as S from "effect/Schema"
-import { GraphQLSchema, GraphQLObjectType, GraphQLInterfaceType, GraphQLFieldConfigMap, GraphQLFieldConfig, GraphQLList, graphql } from "graphql"
-import { toGraphQLType, toGraphQLArgs } from "./schema-mapping"
+import { GraphQLSchema, GraphQLObjectType, GraphQLInterfaceType, GraphQLEnumType, GraphQLUnionType, GraphQLInputObjectType, GraphQLFieldConfigMap, GraphQLFieldConfig, GraphQLInputFieldConfigMap, GraphQLList, GraphQLNonNull, graphql } from "graphql"
+import { toGraphQLType, toGraphQLArgs, toGraphQLInputType } from "./schema-mapping"
 
 /**
  * Configuration for a query or mutation field
@@ -29,6 +29,33 @@ interface InterfaceRegistration {
   name: string
   schema: S.Schema<any, any, any>
   resolveType: (value: any) => string
+}
+
+/**
+ * Configuration for an enum type
+ */
+interface EnumRegistration {
+  name: string
+  values: readonly string[]
+  description?: string
+}
+
+/**
+ * Configuration for a union type
+ */
+interface UnionRegistration {
+  name: string
+  types: readonly string[]
+  resolveType: (value: any) => string
+}
+
+/**
+ * Configuration for an input type
+ */
+interface InputTypeRegistration {
+  name: string
+  schema: S.Schema<any, any, any>
+  description?: string
 }
 
 /**
@@ -64,6 +91,9 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
   private constructor(
     private readonly types: Map<string, TypeRegistration>,
     private readonly interfaces: Map<string, InterfaceRegistration>,
+    private readonly enums: Map<string, EnumRegistration>,
+    private readonly unions: Map<string, UnionRegistration>,
+    private readonly inputs: Map<string, InputTypeRegistration>,
     private readonly queries: Map<string, FieldRegistration>,
     private readonly mutations: Map<string, FieldRegistration>,
     private readonly objectFields: Map<string, Map<string, ObjectFieldRegistration>>
@@ -93,6 +123,9 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     new Map(),
     new Map(),
     new Map(),
+    new Map(),
+    new Map(),
+    new Map(),
     new Map()
   )
 
@@ -113,6 +146,9 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     return new GraphQLSchemaBuilder(
       this.types,
       this.interfaces,
+      this.enums,
+      this.unions,
+      this.inputs,
       newQueries,
       this.mutations,
       this.objectFields
@@ -136,6 +172,9 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     return new GraphQLSchemaBuilder(
       this.types,
       this.interfaces,
+      this.enums,
+      this.unions,
+      this.inputs,
       this.queries,
       newMutations,
       this.objectFields
@@ -182,6 +221,9 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     return new GraphQLSchemaBuilder(
       newTypes,
       this.interfaces,
+      this.enums,
+      this.unions,
+      this.inputs,
       this.queries,
       this.mutations,
       newObjectFields
@@ -212,6 +254,100 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     return new GraphQLSchemaBuilder(
       this.types,
       newInterfaces,
+      this.enums,
+      this.unions,
+      this.inputs,
+      this.queries,
+      this.mutations,
+      this.objectFields
+    )
+  }
+
+  /**
+   * Register an enum type
+   *
+   * @param config - Enum type configuration
+   * @param config.name - The GraphQL enum name
+   * @param config.values - Array of enum value strings
+   * @param config.description - Optional description
+   */
+  enumType(config: {
+    name: string
+    values: readonly string[]
+    description?: string
+  }): GraphQLSchemaBuilder<R> {
+    const { name, values, description } = config
+    const newEnums = new Map(this.enums)
+    newEnums.set(name, { name, values, description })
+
+    return new GraphQLSchemaBuilder(
+      this.types,
+      this.interfaces,
+      newEnums,
+      this.unions,
+      this.inputs,
+      this.queries,
+      this.mutations,
+      this.objectFields
+    )
+  }
+
+  /**
+   * Register a union type
+   *
+   * @param config - Union type configuration
+   * @param config.name - The GraphQL union name
+   * @param config.types - Array of object type names that are part of this union
+   * @param config.resolveType - Optional function to resolve concrete type (defaults to value._tag)
+   */
+  unionType(config: {
+    name: string
+    types: readonly string[]
+    resolveType?: (value: any) => string
+  }): GraphQLSchemaBuilder<R> {
+    const { name, types, resolveType } = config
+    const newUnions = new Map(this.unions)
+    newUnions.set(name, {
+      name,
+      types,
+      resolveType: resolveType ?? ((value: any) => value._tag),
+    })
+
+    return new GraphQLSchemaBuilder(
+      this.types,
+      this.interfaces,
+      this.enums,
+      newUnions,
+      this.inputs,
+      this.queries,
+      this.mutations,
+      this.objectFields
+    )
+  }
+
+  /**
+   * Register an input type
+   *
+   * @param config - Input type configuration
+   * @param config.name - The GraphQL input type name
+   * @param config.schema - The Effect Schema for this input type
+   * @param config.description - Optional description
+   */
+  inputType(config: {
+    name: string
+    schema: S.Schema<any, any, any>
+    description?: string
+  }): GraphQLSchemaBuilder<R> {
+    const { name, schema, description } = config
+    const newInputs = new Map(this.inputs)
+    newInputs.set(name, { name, schema, description })
+
+    return new GraphQLSchemaBuilder(
+      this.types,
+      this.interfaces,
+      this.enums,
+      this.unions,
+      newInputs,
       this.queries,
       this.mutations,
       this.objectFields
@@ -239,6 +375,9 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     return new GraphQLSchemaBuilder(
       this.types,
       this.interfaces,
+      this.enums,
+      this.unions,
+      this.inputs,
       this.queries,
       this.mutations,
       newObjectFields
@@ -252,31 +391,59 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
    * Use the `execute` function to run queries with a service layer.
    */
   buildSchema(): GraphQLSchema {
-    // STEP 1: Build interface registry first (object types may reference them)
+    // STEP 1: Build enum registry first (can be used anywhere)
+    const enumRegistry: Map<string, GraphQLEnumType> = new Map()
+
+    for (const [enumName, enumReg] of this.enums) {
+      const enumValues: Record<string, { value: string }> = {}
+      for (const value of enumReg.values) {
+        enumValues[value] = { value }
+      }
+      const enumType = new GraphQLEnumType({
+        name: enumName,
+        values: enumValues,
+        description: enumReg.description,
+      })
+      enumRegistry.set(enumName, enumType)
+    }
+
+    // STEP 2: Build input type registry (can reference enums and other input types)
+    const inputRegistry: Map<string, GraphQLInputObjectType> = new Map()
+
+    for (const [inputName, inputReg] of this.inputs) {
+      const inputType = new GraphQLInputObjectType({
+        name: inputName,
+        description: inputReg.description,
+        fields: () => this.schemaToInputFields(inputReg.schema, enumRegistry, inputRegistry),
+      })
+      inputRegistry.set(inputName, inputType)
+    }
+
+    // STEP 3: Build interface registry (object types may reference them)
     const interfaceRegistry: Map<string, GraphQLInterfaceType> = new Map()
 
     for (const [interfaceName, interfaceReg] of this.interfaces) {
       const interfaceType = new GraphQLInterfaceType({
         name: interfaceName,
-        fields: () => this.schemaToFields(interfaceReg.schema, typeRegistry),
+        fields: () => this.schemaToFields(interfaceReg.schema, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry),
         resolveType: interfaceReg.resolveType,
       })
       interfaceRegistry.set(interfaceName, interfaceType)
     }
 
-    // STEP 2: Build object type registry
+    // STEP 4: Build object type registry
     const typeRegistry: Map<string, GraphQLObjectType> = new Map()
     const fieldBuilders: Map<string, () => GraphQLFieldConfigMap<any, any>> = new Map()
 
     // Store field builders for each type
     for (const [typeName, typeReg] of this.types) {
       fieldBuilders.set(typeName, () => {
-        const baseFields = this.schemaToFields(typeReg.schema, typeRegistry, interfaceRegistry)
+        const baseFields = this.schemaToFields(typeReg.schema, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry)
         const additionalFields = this.objectFields.get(typeName)
 
         if (additionalFields) {
           for (const [fieldName, fieldConfig] of additionalFields) {
-            baseFields[fieldName] = this.buildObjectField(fieldConfig, typeRegistry, interfaceRegistry)
+            baseFields[fieldName] = this.buildObjectField(fieldConfig, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry)
           }
         }
 
@@ -299,22 +466,37 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
       typeRegistry.set(typeName, graphqlType)
     }
 
-    // STEP 3: Build query and mutation fields
+    // STEP 5: Build union registry (references object types)
+    const unionRegistry: Map<string, GraphQLUnionType> = new Map()
+
+    for (const [unionName, unionReg] of this.unions) {
+      const unionType = new GraphQLUnionType({
+        name: unionName,
+        types: () => unionReg.types.map((typeName) => typeRegistry.get(typeName)!).filter(Boolean),
+        resolveType: unionReg.resolveType,
+      })
+      unionRegistry.set(unionName, unionType)
+    }
+
+    // STEP 6: Build query and mutation fields
     const queryFields: GraphQLFieldConfigMap<any, any> = {}
     for (const [name, config] of this.queries) {
-      queryFields[name] = this.buildField(config, typeRegistry, interfaceRegistry)
+      queryFields[name] = this.buildField(config, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry, inputRegistry)
     }
 
     const mutationFields: GraphQLFieldConfigMap<any, any> = {}
     for (const [name, config] of this.mutations) {
-      mutationFields[name] = this.buildField(config, typeRegistry, interfaceRegistry)
+      mutationFields[name] = this.buildField(config, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry, inputRegistry)
     }
 
-    // STEP 4: Build schema
+    // STEP 7: Build schema
     const schemaConfig: any = {
       types: [
+        ...Array.from(enumRegistry.values()),
+        ...Array.from(inputRegistry.values()),
         ...Array.from(interfaceRegistry.values()),
         ...Array.from(typeRegistry.values()),
+        ...Array.from(unionRegistry.values()),
       ]
     }
 
@@ -341,17 +523,20 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
   private buildField(
     config: FieldRegistration,
     typeRegistry: Map<string, GraphQLObjectType>,
-    interfaceRegistry: Map<string, GraphQLInterfaceType>
+    interfaceRegistry: Map<string, GraphQLInterfaceType>,
+    enumRegistry: Map<string, GraphQLEnumType>,
+    unionRegistry: Map<string, GraphQLUnionType>,
+    inputRegistry: Map<string, GraphQLInputObjectType>
   ): GraphQLFieldConfig<any, any> {
     const fieldConfig: GraphQLFieldConfig<any, any> = {
-      type: this.toGraphQLTypeWithRegistry(config.type, typeRegistry, interfaceRegistry),
+      type: this.toGraphQLTypeWithRegistry(config.type, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry),
       resolve: async (_parent, args, context: GraphQLEffectContext<any>) => {
         const effect = config.resolve(args)
         return await Runtime.runPromise(context.runtime)(effect)
       }
     }
     if (config.args) {
-      fieldConfig.args = toGraphQLArgs(config.args)
+      fieldConfig.args = this.toGraphQLArgsWithRegistry(config.args, enumRegistry, inputRegistry)
     }
     if (config.description) {
       fieldConfig.description = config.description
@@ -365,17 +550,20 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
   private buildObjectField(
     config: ObjectFieldRegistration,
     typeRegistry: Map<string, GraphQLObjectType>,
-    interfaceRegistry: Map<string, GraphQLInterfaceType>
+    interfaceRegistry: Map<string, GraphQLInterfaceType>,
+    enumRegistry: Map<string, GraphQLEnumType>,
+    unionRegistry: Map<string, GraphQLUnionType>,
+    inputRegistry: Map<string, GraphQLInputObjectType> = new Map()
   ): GraphQLFieldConfig<any, any> {
     const fieldConfig: GraphQLFieldConfig<any, any> = {
-      type: this.toGraphQLTypeWithRegistry(config.type, typeRegistry, interfaceRegistry),
+      type: this.toGraphQLTypeWithRegistry(config.type, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry),
       resolve: async (parent, args, context: GraphQLEffectContext<any>) => {
         const effect = config.resolve(parent, args)
         return await Runtime.runPromise(context.runtime)(effect)
       }
     }
     if (config.args) {
-      fieldConfig.args = toGraphQLArgs(config.args)
+      fieldConfig.args = this.toGraphQLArgsWithRegistry(config.args, enumRegistry, inputRegistry)
     }
     if (config.description) {
       fieldConfig.description = config.description
@@ -389,7 +577,9 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
   private toGraphQLTypeWithRegistry(
     schema: S.Schema<any, any, any>,
     typeRegistry: Map<string, GraphQLObjectType>,
-    interfaceRegistry: Map<string, GraphQLInterfaceType> = new Map()
+    interfaceRegistry: Map<string, GraphQLInterfaceType> = new Map(),
+    enumRegistry: Map<string, GraphQLEnumType> = new Map(),
+    unionRegistry: Map<string, GraphQLUnionType> = new Map()
   ): any {
     const ast = schema.ast
 
@@ -401,16 +591,83 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
         // S.Array() uses rest, not elements
         if (toAst.rest && toAst.rest.length > 0) {
           const elementSchema = S.make(toAst.rest[0].type)
-          const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry)
+          const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry)
           return new GraphQLList(elementType)
         } else if (toAst.elements.length > 0) {
           const elementSchema = S.make(toAst.elements[0].type)
-          const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry)
+          const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry)
           return new GraphQLList(elementType)
         }
       }
       // Other transformations - recurse on the "to" side
-      return this.toGraphQLTypeWithRegistry(S.make((ast as any).to), typeRegistry, interfaceRegistry)
+      return this.toGraphQLTypeWithRegistry(S.make((ast as any).to), typeRegistry, interfaceRegistry, enumRegistry, unionRegistry)
+    }
+
+    // Check if this schema matches a registered enum by comparing literal values
+    // S.Literal("A", "B", "C") creates a Union of Literals
+    if (ast._tag === "Union") {
+      const unionAst = ast as any
+      const allLiterals = unionAst.types.every((t: any) => t._tag === "Literal")
+
+      if (allLiterals) {
+        // Extract literal values from the union
+        const literalValues = unionAst.types.map((t: any) => String(t.literal)).sort()
+
+        // Check if any registered enum has the same values
+        for (const [enumName, enumReg] of this.enums) {
+          const enumValues = [...enumReg.values].sort()
+          if (literalValues.length === enumValues.length &&
+              literalValues.every((v: string, i: number) => v === enumValues[i])) {
+            const result = enumRegistry.get(enumName)
+            if (result) {
+              return result
+            }
+          }
+        }
+      } else {
+        // This is a Union of object types - check if it matches a registered union
+        // First, collect the _tag values from each union member
+        const memberTags: string[] = []
+        for (const memberAst of unionAst.types) {
+          if (memberAst._tag === "TypeLiteral") {
+            const tagProp = memberAst.propertySignatures.find(
+              (p: any) => String(p.name) === "_tag"
+            )
+            if (tagProp && tagProp.type._tag === "Literal") {
+              memberTags.push(String(tagProp.type.literal))
+            }
+          }
+        }
+
+        // Check if any registered union has matching types
+        if (memberTags.length === unionAst.types.length) {
+          for (const [unionName, unionReg] of this.unions) {
+            const unionTypes = [...unionReg.types].sort()
+            const sortedTags = [...memberTags].sort()
+            if (sortedTags.length === unionTypes.length &&
+                sortedTags.every((tag, i) => tag === unionTypes[i])) {
+              const result = unionRegistry.get(unionName)
+              if (result) {
+                return result
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Check single literal (for cases like status: S.Literal("DRAFT"))
+    if (ast._tag === "Literal") {
+      const literalValue = String((ast as any).literal)
+      // Check if this literal is part of any registered enum
+      for (const [enumName, enumReg] of this.enums) {
+        if (enumReg.values.includes(literalValue)) {
+          const result = enumRegistry.get(enumName)
+          if (result) {
+            return result
+          }
+        }
+      }
     }
 
     // Check if this schema matches a registered interface (compare by AST)
@@ -438,11 +695,11 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
       const tupleAst = ast as any
       if (tupleAst.rest && tupleAst.rest.length > 0) {
         const elementSchema = S.make(tupleAst.rest[0].type)
-        const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry)
+        const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry)
         return new GraphQLList(elementType)
       } else if (tupleAst.elements && tupleAst.elements.length > 0) {
         const elementSchema = S.make(tupleAst.elements[0].type)
-        const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry)
+        const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry)
         return new GraphQLList(elementType)
       }
     }
@@ -457,7 +714,9 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
   private schemaToFields(
     schema: S.Schema<any, any, any>,
     typeRegistry: Map<string, GraphQLObjectType>,
-    interfaceRegistry: Map<string, GraphQLInterfaceType> = new Map()
+    interfaceRegistry: Map<string, GraphQLInterfaceType> = new Map(),
+    enumRegistry: Map<string, GraphQLEnumType> = new Map(),
+    unionRegistry: Map<string, GraphQLUnionType> = new Map()
   ): GraphQLFieldConfigMap<any, any> {
     const ast = schema.ast
 
@@ -468,7 +727,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
         const fieldName = String(field.name)
         const fieldSchema = S.make(field.type)
         fields[fieldName] = {
-          type: this.toGraphQLTypeWithRegistry(fieldSchema, typeRegistry, interfaceRegistry)
+          type: this.toGraphQLTypeWithRegistry(fieldSchema, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry)
         }
       }
 
@@ -476,6 +735,149 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     }
 
     return {}
+  }
+
+  /**
+   * Convert a schema to GraphQL input fields
+   */
+  private schemaToInputFields(
+    schema: S.Schema<any, any, any>,
+    enumRegistry: Map<string, GraphQLEnumType>,
+    inputRegistry: Map<string, GraphQLInputObjectType>
+  ): GraphQLInputFieldConfigMap {
+    const ast = schema.ast
+
+    if (ast._tag === "TypeLiteral") {
+      const fields: GraphQLInputFieldConfigMap = {}
+
+      for (const field of ast.propertySignatures) {
+        const fieldName = String(field.name)
+        const fieldSchema = S.make(field.type)
+        let fieldType = this.toGraphQLInputTypeWithRegistry(fieldSchema, enumRegistry, inputRegistry)
+
+        // Make non-optional fields non-null
+        if (!field.isOptional) {
+          fieldType = new GraphQLNonNull(fieldType)
+        }
+
+        fields[fieldName] = { type: fieldType }
+      }
+
+      return fields
+    }
+
+    return {}
+  }
+
+  /**
+   * Convert a schema to GraphQL input type, checking enum and input registries
+   */
+  private toGraphQLInputTypeWithRegistry(
+    schema: S.Schema<any, any, any>,
+    enumRegistry: Map<string, GraphQLEnumType>,
+    inputRegistry: Map<string, GraphQLInputObjectType> = new Map()
+  ): any {
+    const ast = schema.ast
+
+    // Handle transformations (like S.optional wrapping)
+    if (ast._tag === "Transformation") {
+      const toAst = (ast as any).to
+      // Recurse on the "to" side for transformations
+      return this.toGraphQLInputTypeWithRegistry(S.make(toAst), enumRegistry, inputRegistry)
+    }
+
+    // Check if this schema matches a registered input type (by AST reference)
+    for (const [inputName, inputReg] of this.inputs) {
+      if (inputReg.schema.ast === ast || inputReg.schema === schema) {
+        const result = inputRegistry.get(inputName)
+        if (result) {
+          return result
+        }
+      }
+    }
+
+    // Check if this schema matches a registered enum by comparing literal values
+    if (ast._tag === "Union") {
+      const unionAst = ast as any
+
+      // Handle S.optional which creates Union(LiteralUnion, UndefinedKeyword)
+      const nonUndefinedTypes = unionAst.types.filter((t: any) => t._tag !== "UndefinedKeyword")
+      if (nonUndefinedTypes.length === 1 && nonUndefinedTypes[0]._tag === "Union") {
+        // Recurse on the inner union (the actual enum values)
+        return this.toGraphQLInputTypeWithRegistry(S.make(nonUndefinedTypes[0]), enumRegistry, inputRegistry)
+      }
+
+      // Check for nested input type inside optional
+      if (nonUndefinedTypes.length === 1 && nonUndefinedTypes[0]._tag === "TypeLiteral") {
+        return this.toGraphQLInputTypeWithRegistry(S.make(nonUndefinedTypes[0]), enumRegistry, inputRegistry)
+      }
+
+      const allLiterals = unionAst.types.every((t: any) => t._tag === "Literal")
+
+      if (allLiterals) {
+        const literalValues = unionAst.types.map((t: any) => String(t.literal)).sort()
+
+        for (const [enumName, enumReg] of this.enums) {
+          const enumValues = [...enumReg.values].sort()
+          if (literalValues.length === enumValues.length &&
+              literalValues.every((v: string, i: number) => v === enumValues[i])) {
+            const result = enumRegistry.get(enumName)
+            if (result) {
+              return result
+            }
+          }
+        }
+      }
+    }
+
+    // Check single literal
+    if (ast._tag === "Literal") {
+      const literalValue = String((ast as any).literal)
+      for (const [enumName, enumReg] of this.enums) {
+        if (enumReg.values.includes(literalValue)) {
+          const result = enumRegistry.get(enumName)
+          if (result) {
+            return result
+          }
+        }
+      }
+    }
+
+    // Fall back to default toGraphQLInputType
+    return toGraphQLInputType(schema)
+  }
+
+  /**
+   * Convert a schema to GraphQL arguments with registry support
+   */
+  private toGraphQLArgsWithRegistry(
+    schema: S.Schema<any, any, any>,
+    enumRegistry: Map<string, GraphQLEnumType>,
+    inputRegistry: Map<string, GraphQLInputObjectType> = new Map()
+  ): any {
+    const ast = schema.ast
+
+    if (ast._tag === "TypeLiteral") {
+      const args: Record<string, { type: any }> = {}
+
+      for (const field of (ast as any).propertySignatures) {
+        const fieldName = String(field.name)
+        const fieldSchema = S.make(field.type)
+        let fieldType = this.toGraphQLInputTypeWithRegistry(fieldSchema, enumRegistry, inputRegistry)
+
+        // Make non-optional fields non-null
+        if (!field.isOptional) {
+          fieldType = new GraphQLNonNull(fieldType)
+        }
+
+        args[fieldName] = { type: fieldType }
+      }
+
+      return args
+    }
+
+    // Fall back to default toGraphQLArgs
+    return toGraphQLArgs(schema)
   }
 }
 
@@ -508,6 +910,36 @@ export const interfaceType = (config: {
   resolveType?: (value: any) => string
 }) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R> =>
   builder.interfaceType(config)
+
+/**
+ * Add an enum type to the schema builder (pipe-able)
+ */
+export const enumType = (config: {
+  name: string
+  values: readonly string[]
+  description?: string
+}) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R> =>
+  builder.enumType(config)
+
+/**
+ * Add a union type to the schema builder (pipe-able)
+ */
+export const unionType = (config: {
+  name: string
+  types: readonly string[]
+  resolveType?: (value: any) => string
+}) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R> =>
+  builder.unionType(config)
+
+/**
+ * Add an input type to the schema builder (pipe-able)
+ */
+export const inputType = (config: {
+  name: string
+  schema: S.Schema<any, any, any>
+  description?: string
+}) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R> =>
+  builder.inputType(config)
 
 /**
  * Add a query field to the schema builder (pipe-able)
