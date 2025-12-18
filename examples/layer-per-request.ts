@@ -109,26 +109,30 @@ const LoggerServiceLive = Layer.succeed(LoggerService, {
 
 const builder = GraphQLSchemaBuilder.empty
   // User type with colocated posts field
-  .objectType("User", UserSchema, {
-    posts: {
-      type: S.Array(PostSchema),
-      args: S.Struct({
-        limit: S.optional(S.Number),
-      }),
-      description: "Get posts written by this user",
-      resolve: (parent: User, args: { limit?: number }) =>
-        Effect.gen(function*() {
-          const db = yield* DatabaseService
-          const logger = yield* LoggerService
-          yield* logger.info(`Fetching posts for user ${parent.id}`)
-          const posts = yield* db.getPostsForUser(parent.id)
-          return args.limit ? posts.slice(0, args.limit) : posts
+  .objectType({
+    name: "User",
+    schema: UserSchema,
+    fields: {
+      posts: {
+        type: S.Array(PostSchema),
+        args: S.Struct({
+          limit: S.optional(S.Number),
         }),
+        description: "Get posts written by this user",
+        resolve: (parent: User, args: { limit?: number }) =>
+          Effect.gen(function*() {
+            const db = yield* DatabaseService
+            const logger = yield* LoggerService
+            yield* logger.info(`Fetching posts for user ${parent.id}`)
+            const posts = yield* db.getPostsForUser(parent.id)
+            return args.limit ? posts.slice(0, args.limit) : posts
+          }),
+      },
     },
   })
 
   // Post type
-  .objectType("Post", PostSchema)
+  .objectType({ name: "Post", schema: PostSchema })
 
   // Query: Get single user
   .query("user", {

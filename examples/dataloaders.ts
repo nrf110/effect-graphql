@@ -143,28 +143,36 @@ const makeDataLoaders = (db: {
 
 const builder = GraphQLSchemaBuilder.empty
   // User type with posts field (uses dataloader)
-  .objectType("User", UserSchema, {
-    posts: {
-      type: S.Array(PostSchema),
-      description: "Posts written by this user (batched)",
-      resolve: (parent: User) =>
-        Effect.gen(function*() {
-          const loaders = yield* DataLoaders
-          return yield* Effect.promise(() => loaders.postsByAuthorId.load(parent.id))
-        }),
+  .objectType({
+    name: "User",
+    schema: UserSchema,
+    fields: {
+      posts: {
+        type: S.Array(PostSchema),
+        description: "Posts written by this user (batched)",
+        resolve: (parent: User) =>
+          Effect.gen(function*() {
+            const loaders = yield* DataLoaders
+            return yield* Effect.promise(() => loaders.postsByAuthorId.load(parent.id))
+          }),
+      },
     },
   })
 
   // Post type with author field (uses dataloader)
-  .objectType("Post", PostSchema, {
-    author: {
-      type: UserSchema,
-      description: "The author of this post (batched)",
-      resolve: (parent: Post) =>
-        Effect.gen(function*() {
-          const loaders = yield* DataLoaders
-          return yield* Effect.promise(() => loaders.userById.load(parent.authorId))
-        }),
+  .objectType({
+    name: "Post",
+    schema: PostSchema,
+    fields: {
+      author: {
+        type: UserSchema,
+        description: "The author of this post (batched)",
+        resolve: (parent: Post) =>
+          Effect.gen(function*() {
+            const loaders = yield* DataLoaders
+            return yield* Effect.promise(() => loaders.userById.load(parent.authorId))
+          }),
+      },
     },
   })
 

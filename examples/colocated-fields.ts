@@ -95,41 +95,49 @@ const LoggerServiceLive = Layer.succeed(LoggerService, {
 
 const builder = GraphQLSchemaBuilder.empty
   // User type with its posts field defined inline
-  .objectType("User", UserSchema, {
-    posts: {
-      type: S.Array(PostSchema),
-      args: S.Struct({
-        limit: S.optional(S.Number),
-      }),
-      description: "Get posts written by this user",
-      resolve: (parent: User, args: { limit?: number }) =>
-        Effect.gen(function*() {
-          const db = yield* DatabaseService
-          const logger = yield* LoggerService
-          yield* logger.info(`Fetching posts for user ${parent.id}`)
-          const posts = yield* db.getPostsForUser(parent.id)
-          return args.limit ? posts.slice(0, args.limit) : posts
+  .objectType({
+    name: "User",
+    schema: UserSchema,
+    fields: {
+      posts: {
+        type: S.Array(PostSchema),
+        args: S.Struct({
+          limit: S.optional(S.Number),
         }),
-    },
-    // Can define multiple fields
-    displayName: {
-      type: S.String,
-      description: "Formatted display name",
-      resolve: (parent: User) =>
-        Effect.succeed(`${parent.name} <${parent.email}>`),
+        description: "Get posts written by this user",
+        resolve: (parent: User, args: { limit?: number }) =>
+          Effect.gen(function*() {
+            const db = yield* DatabaseService
+            const logger = yield* LoggerService
+            yield* logger.info(`Fetching posts for user ${parent.id}`)
+            const posts = yield* db.getPostsForUser(parent.id)
+            return args.limit ? posts.slice(0, args.limit) : posts
+          }),
+      },
+      // Can define multiple fields
+      displayName: {
+        type: S.String,
+        description: "Formatted display name",
+        resolve: (parent: User) =>
+          Effect.succeed(`${parent.name} <${parent.email}>`),
+      },
     },
   })
 
   // Post type with its author field defined inline
-  .objectType("Post", PostSchema, {
-    author: {
-      type: UserSchema,
-      description: "The author of this post",
-      resolve: (parent: Post) =>
-        Effect.gen(function*() {
-          const db = yield* DatabaseService
-          return yield* db.getAuthor(parent.authorId)
-        }),
+  .objectType({
+    name: "Post",
+    schema: PostSchema,
+    fields: {
+      author: {
+        type: UserSchema,
+        description: "The author of this post",
+        resolve: (parent: Post) =>
+          Effect.gen(function*() {
+            const db = yield* DatabaseService
+            return yield* db.getAuthor(parent.authorId)
+          }),
+      },
     },
   })
 

@@ -38,8 +38,8 @@ const products: Product[] = [
 
 // Build schema
 const builder = GraphQLSchemaBuilder.empty.pipe(
-  objectType("Product", ProductSchema),
-  objectType("Stats", StatsSchema),
+  objectType({ name: "Product", schema: ProductSchema }),
+  objectType({ name: "Stats", schema: StatsSchema }),
 
   query("product", {
     type: ProductSchema,

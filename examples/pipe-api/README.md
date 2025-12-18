@@ -26,10 +26,14 @@ pipe-api/
 
 **user-schema.ts**:
 ```typescript
-export const userType = objectType("User", UserSchema, {
-  posts: {
-    type: S.Array(PostSchema),
-    resolve: (parent) => /* ... */
+export const userType = objectType({
+  name: "User",
+  schema: UserSchema,
+  fields: {
+    posts: {
+      type: S.Array(PostSchema),
+      resolve: (parent) => /* ... */
+    }
   }
 })
 
@@ -41,10 +45,14 @@ export const userQueries = [
 
 **post-schema.ts**:
 ```typescript
-export const postType = objectType("Post", PostSchema, {
-  author: {
-    type: UserSchema,
-    resolve: (parent) => /* ... */
+export const postType = objectType({
+  name: "Post",
+  schema: PostSchema,
+  fields: {
+    author: {
+      type: UserSchema,
+      resolve: (parent) => /* ... */
+    }
   }
 })
 ```
@@ -65,14 +73,14 @@ const schema = builder.buildSchema()
 
 **Note**: Use the `compose` helper to combine multiple operations from an array. This is needed because TypeScript can't properly type-check spread arguments in `pipe`.
 
-## Usage
+## API
 
 `GraphQLSchemaBuilder` implements the Effect `Pipeable` interface, so you can use the fluent `.pipe()` syntax:
 
 ```typescript
 GraphQLSchemaBuilder.empty.pipe(
-  objectType("User", UserSchema, { /* fields */ }),
-  objectType("Post", PostSchema),
+  objectType({ name: "User", schema: UserSchema, fields: { /* ... */ } }),
+  objectType({ name: "Post", schema: PostSchema }),
   query("user", { /* ... */ }),
   mutation("createUser", { /* ... */ })
 )
@@ -81,8 +89,8 @@ GraphQLSchemaBuilder.empty.pipe(
 You can also use method chaining directly:
 ```typescript
 GraphQLSchemaBuilder.empty
-  .objectType("User", UserSchema, { /* fields */ })
-  .objectType("Post", PostSchema)
+  .objectType({ name: "User", schema: UserSchema, fields: { /* ... */ } })
+  .objectType({ name: "Post", schema: PostSchema })
   .query("user", { /* ... */ })
   .mutation("createUser", { /* ... */ })
 ```

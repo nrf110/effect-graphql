@@ -116,23 +116,31 @@ const loaders = Loader.define({
 // ============================================================================
 
 const builder = GraphQLSchemaBuilder.empty
-  .objectType("User", UserSchema, {
-    posts: {
-      type: S.Array(PostSchema),
-      description: "Posts written by this user",
-      resolve: (parent: User) =>
-        // Clean one-liner!
-        loaders.load("PostsByAuthorId", parent.id),
+  .objectType({
+    name: "User",
+    schema: UserSchema,
+    fields: {
+      posts: {
+        type: S.Array(PostSchema),
+        description: "Posts written by this user",
+        resolve: (parent: User) =>
+          // Clean one-liner!
+          loaders.load("PostsByAuthorId", parent.id),
+      },
     },
   })
 
-  .objectType("Post", PostSchema, {
-    author: {
-      type: UserSchema,
-      description: "The author of this post",
-      resolve: (parent: Post) =>
-        // Just specify loader name and key
-        loaders.load("UserById", parent.authorId),
+  .objectType({
+    name: "Post",
+    schema: PostSchema,
+    fields: {
+      author: {
+        type: UserSchema,
+        description: "The author of this post",
+        resolve: (parent: Post) =>
+          // Just specify loader name and key
+          loaders.load("UserById", parent.authorId),
+      },
     },
   })
 

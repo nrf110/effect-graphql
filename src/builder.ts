@@ -1,6 +1,6 @@
 import { Effect, Layer, Runtime, Pipeable } from "effect"
 import * as S from "effect/Schema"
-import { GraphQLSchema, GraphQLObjectType, GraphQLFieldConfigMap, GraphQLFieldConfig, GraphQLList, graphql } from "graphql"
+import { GraphQLSchema, GraphQLObjectType, GraphQLInterfaceType, GraphQLFieldConfigMap, GraphQLFieldConfig, GraphQLList, graphql } from "graphql"
 import { toGraphQLType, toGraphQLArgs } from "./schema-mapping"
 
 /**
@@ -19,6 +19,16 @@ interface FieldRegistration<Args = any, A = any, E = any, R = any> {
 interface TypeRegistration {
   name: string
   schema: S.Schema<any, any, any>
+  implements?: readonly string[]
+}
+
+/**
+ * Configuration for an interface type
+ */
+interface InterfaceRegistration {
+  name: string
+  schema: S.Schema<any, any, any>
+  resolveType: (value: any) => string
 }
 
 /**
@@ -53,6 +63,7 @@ export interface GraphQLEffectContext<R> {
 export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
   private constructor(
     private readonly types: Map<string, TypeRegistration>,
+    private readonly interfaces: Map<string, InterfaceRegistration>,
     private readonly queries: Map<string, FieldRegistration>,
     private readonly mutations: Map<string, FieldRegistration>,
     private readonly objectFields: Map<string, Map<string, ObjectFieldRegistration>>
@@ -81,6 +92,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     new Map(),
     new Map(),
     new Map(),
+    new Map(),
     new Map()
   )
 
@@ -100,6 +112,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     newQueries.set(name, config)
     return new GraphQLSchemaBuilder(
       this.types,
+      this.interfaces,
       newQueries,
       this.mutations,
       this.objectFields
@@ -122,6 +135,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     newMutations.set(name, config)
     return new GraphQLSchemaBuilder(
       this.types,
+      this.interfaces,
       this.queries,
       newMutations,
       this.objectFields
@@ -131,22 +145,26 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
   /**
    * Register an object type from a schema
    *
-   * @param name - The GraphQL type name
-   * @param schema - The Effect Schema for this type
-   * @param fields - Optional additional/computed fields for this type
+   * @param config - Object type configuration
+   * @param config.name - The GraphQL type name
+   * @param config.schema - The Effect Schema for this type
+   * @param config.implements - Optional array of interface names this type implements
+   * @param config.fields - Optional additional/computed fields for this type
    */
-  objectType<A, R2 = never>(
-    name: string,
-    schema: S.Schema<A, any, any>,
+  objectType<A, R2 = never>(config: {
+    name: string
+    schema: S.Schema<A, any, any>
+    implements?: readonly string[]
     fields?: Record<string, {
       type: S.Schema<any, any, any>
       args?: S.Schema<any, any, any>
       description?: string
       resolve: (parent: A, args: any) => Effect.Effect<any, any, any>
     }>
-  ): GraphQLSchemaBuilder<R | R2> {
+  }): GraphQLSchemaBuilder<R | R2> {
+    const { name, schema, implements: implementsInterfaces, fields } = config
     const newTypes = new Map(this.types)
-    newTypes.set(name, { name, schema })
+    newTypes.set(name, { name, schema, implements: implementsInterfaces })
 
     // If fields are provided, add them
     let newObjectFields = this.objectFields
@@ -163,10 +181,41 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
 
     return new GraphQLSchemaBuilder(
       newTypes,
+      this.interfaces,
       this.queries,
       this.mutations,
       newObjectFields
     ) as any
+  }
+
+  /**
+   * Register an interface type from a schema
+   *
+   * @param config - Interface type configuration
+   * @param config.name - The GraphQL interface name
+   * @param config.schema - The Effect Schema defining interface fields
+   * @param config.resolveType - Optional function to resolve concrete type (defaults to value._tag)
+   */
+  interfaceType(config: {
+    name: string
+    schema: S.Schema<any, any, any>
+    resolveType?: (value: any) => string
+  }): GraphQLSchemaBuilder<R> {
+    const { name, schema, resolveType } = config
+    const newInterfaces = new Map(this.interfaces)
+    newInterfaces.set(name, {
+      name,
+      schema,
+      resolveType: resolveType ?? ((value: any) => value._tag),
+    })
+
+    return new GraphQLSchemaBuilder(
+      this.types,
+      newInterfaces,
+      this.queries,
+      this.mutations,
+      this.objectFields
+    )
   }
 
   /**
@@ -189,6 +238,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
 
     return new GraphQLSchemaBuilder(
       this.types,
+      this.interfaces,
       this.queries,
       this.mutations,
       newObjectFields
@@ -202,19 +252,31 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
    * Use the `execute` function to run queries with a service layer.
    */
   buildSchema(): GraphQLSchema {
-    // STEP 1: Build type registry
+    // STEP 1: Build interface registry first (object types may reference them)
+    const interfaceRegistry: Map<string, GraphQLInterfaceType> = new Map()
+
+    for (const [interfaceName, interfaceReg] of this.interfaces) {
+      const interfaceType = new GraphQLInterfaceType({
+        name: interfaceName,
+        fields: () => this.schemaToFields(interfaceReg.schema, typeRegistry),
+        resolveType: interfaceReg.resolveType,
+      })
+      interfaceRegistry.set(interfaceName, interfaceType)
+    }
+
+    // STEP 2: Build object type registry
     const typeRegistry: Map<string, GraphQLObjectType> = new Map()
     const fieldBuilders: Map<string, () => GraphQLFieldConfigMap<any, any>> = new Map()
 
     // Store field builders for each type
     for (const [typeName, typeReg] of this.types) {
       fieldBuilders.set(typeName, () => {
-        const baseFields = this.schemaToFields(typeReg.schema, typeRegistry)
+        const baseFields = this.schemaToFields(typeReg.schema, typeRegistry, interfaceRegistry)
         const additionalFields = this.objectFields.get(typeName)
 
         if (additionalFields) {
           for (const [fieldName, fieldConfig] of additionalFields) {
-            baseFields[fieldName] = this.buildObjectField(fieldConfig, typeRegistry)
+            baseFields[fieldName] = this.buildObjectField(fieldConfig, typeRegistry, interfaceRegistry)
           }
         }
 
@@ -224,27 +286,36 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
 
     // Create types with field functions (allows circular references)
     for (const [typeName, fieldBuilder] of fieldBuilders) {
+      const typeReg = this.types.get(typeName)!
+      const implementedInterfaces = typeReg.implements?.map(
+        (name) => interfaceRegistry.get(name)!
+      ).filter(Boolean) ?? []
+
       const graphqlType = new GraphQLObjectType({
         name: typeName,
-        fields: fieldBuilder
+        fields: fieldBuilder,
+        interfaces: implementedInterfaces.length > 0 ? implementedInterfaces : undefined,
       })
       typeRegistry.set(typeName, graphqlType)
     }
 
-    // STEP 2: Build query and mutation fields
+    // STEP 3: Build query and mutation fields
     const queryFields: GraphQLFieldConfigMap<any, any> = {}
     for (const [name, config] of this.queries) {
-      queryFields[name] = this.buildField(config, typeRegistry)
+      queryFields[name] = this.buildField(config, typeRegistry, interfaceRegistry)
     }
 
     const mutationFields: GraphQLFieldConfigMap<any, any> = {}
     for (const [name, config] of this.mutations) {
-      mutationFields[name] = this.buildField(config, typeRegistry)
+      mutationFields[name] = this.buildField(config, typeRegistry, interfaceRegistry)
     }
 
-    // STEP 3: Build schema
+    // STEP 4: Build schema
     const schemaConfig: any = {
-      types: Array.from(typeRegistry.values())
+      types: [
+        ...Array.from(interfaceRegistry.values()),
+        ...Array.from(typeRegistry.values()),
+      ]
     }
 
     if (Object.keys(queryFields).length > 0) {
@@ -269,10 +340,11 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
    */
   private buildField(
     config: FieldRegistration,
-    typeRegistry: Map<string, GraphQLObjectType>
+    typeRegistry: Map<string, GraphQLObjectType>,
+    interfaceRegistry: Map<string, GraphQLInterfaceType>
   ): GraphQLFieldConfig<any, any> {
     const fieldConfig: GraphQLFieldConfig<any, any> = {
-      type: this.toGraphQLTypeWithRegistry(config.type, typeRegistry),
+      type: this.toGraphQLTypeWithRegistry(config.type, typeRegistry, interfaceRegistry),
       resolve: async (_parent, args, context: GraphQLEffectContext<any>) => {
         const effect = config.resolve(args)
         return await Runtime.runPromise(context.runtime)(effect)
@@ -292,10 +364,11 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
    */
   private buildObjectField(
     config: ObjectFieldRegistration,
-    typeRegistry: Map<string, GraphQLObjectType>
+    typeRegistry: Map<string, GraphQLObjectType>,
+    interfaceRegistry: Map<string, GraphQLInterfaceType>
   ): GraphQLFieldConfig<any, any> {
     const fieldConfig: GraphQLFieldConfig<any, any> = {
-      type: this.toGraphQLTypeWithRegistry(config.type, typeRegistry),
+      type: this.toGraphQLTypeWithRegistry(config.type, typeRegistry, interfaceRegistry),
       resolve: async (parent, args, context: GraphQLEffectContext<any>) => {
         const effect = config.resolve(parent, args)
         return await Runtime.runPromise(context.runtime)(effect)
@@ -315,7 +388,8 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
    */
   private toGraphQLTypeWithRegistry(
     schema: S.Schema<any, any, any>,
-    typeRegistry: Map<string, GraphQLObjectType>
+    typeRegistry: Map<string, GraphQLObjectType>,
+    interfaceRegistry: Map<string, GraphQLInterfaceType> = new Map()
   ): any {
     const ast = schema.ast
 
@@ -327,16 +401,26 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
         // S.Array() uses rest, not elements
         if (toAst.rest && toAst.rest.length > 0) {
           const elementSchema = S.make(toAst.rest[0].type)
-          const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry)
+          const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry)
           return new GraphQLList(elementType)
         } else if (toAst.elements.length > 0) {
           const elementSchema = S.make(toAst.elements[0].type)
-          const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry)
+          const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry)
           return new GraphQLList(elementType)
         }
       }
       // Other transformations - recurse on the "to" side
-      return this.toGraphQLTypeWithRegistry(S.make((ast as any).to), typeRegistry)
+      return this.toGraphQLTypeWithRegistry(S.make((ast as any).to), typeRegistry, interfaceRegistry)
+    }
+
+    // Check if this schema matches a registered interface (compare by AST)
+    for (const [interfaceName, interfaceReg] of this.interfaces) {
+      if (interfaceReg.schema.ast === ast || interfaceReg.schema === schema) {
+        const result = interfaceRegistry.get(interfaceName)
+        if (result) {
+          return result
+        }
+      }
     }
 
     // Check if this schema matches a registered type (compare by AST)
@@ -354,11 +438,11 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
       const tupleAst = ast as any
       if (tupleAst.rest && tupleAst.rest.length > 0) {
         const elementSchema = S.make(tupleAst.rest[0].type)
-        const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry)
+        const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry)
         return new GraphQLList(elementType)
       } else if (tupleAst.elements && tupleAst.elements.length > 0) {
         const elementSchema = S.make(tupleAst.elements[0].type)
-        const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry)
+        const elementType = this.toGraphQLTypeWithRegistry(elementSchema, typeRegistry, interfaceRegistry)
         return new GraphQLList(elementType)
       }
     }
@@ -372,7 +456,8 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
    */
   private schemaToFields(
     schema: S.Schema<any, any, any>,
-    typeRegistry: Map<string, GraphQLObjectType>
+    typeRegistry: Map<string, GraphQLObjectType>,
+    interfaceRegistry: Map<string, GraphQLInterfaceType> = new Map()
   ): GraphQLFieldConfigMap<any, any> {
     const ast = schema.ast
 
@@ -383,7 +468,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
         const fieldName = String(field.name)
         const fieldSchema = S.make(field.type)
         fields[fieldName] = {
-          type: this.toGraphQLTypeWithRegistry(fieldSchema, typeRegistry)
+          type: this.toGraphQLTypeWithRegistry(fieldSchema, typeRegistry, interfaceRegistry)
         }
       }
 
@@ -401,17 +486,28 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
 /**
  * Add an object type to the schema builder (pipe-able)
  */
-export const objectType = <A, R2 = never>(
-  name: string,
-  schema: S.Schema<A, any, any>,
+export const objectType = <A, R2 = never>(config: {
+  name: string
+  schema: S.Schema<A, any, any>
+  implements?: readonly string[]
   fields?: Record<string, {
     type: S.Schema<any, any, any>
     args?: S.Schema<any, any, any>
     description?: string
     resolve: (parent: A, args: any) => Effect.Effect<any, any, any>
   }>
-) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R | R2> =>
-  builder.objectType(name, schema, fields)
+}) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R | R2> =>
+  builder.objectType(config)
+
+/**
+ * Add an interface type to the schema builder (pipe-able)
+ */
+export const interfaceType = (config: {
+  name: string
+  schema: S.Schema<any, any, any>
+  resolveType?: (value: any) => string
+}) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R> =>
+  builder.interfaceType(config)
 
 /**
  * Add a query field to the schema builder (pipe-able)
