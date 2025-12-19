@@ -110,7 +110,7 @@ const builder = GraphQLSchemaBuilder.empty.pipe(
   objectType({ name: "TextContent", schema: TextContentSchema }),
   objectType({ name: "ImageContent", schema: ImageContentSchema }),
   objectType({ name: "VideoContent", schema: VideoContentSchema }),
-
+).pipe(
   // Register union type - uses _tag for type resolution by default
   unionType({
     name: "MediaContent",

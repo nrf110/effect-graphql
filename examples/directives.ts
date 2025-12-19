@@ -73,31 +73,32 @@ const secrets = [
 const builder = GraphQLSchemaBuilder.empty.pipe(
   // Register executable directive: @auth
   // This directive checks if the current user has the required role
-  directive({
+  directive<{ readonly role: string }, AuthService>({
     name: "auth",
     description: "Requires authentication with a specific role",
     locations: [DirectiveLocation.FIELD_DEFINITION],
     args: S.Struct({
       role: S.String,
     }),
-    apply: (args: { role: string }) => <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    apply: (args) => <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.gen(function*() {
         const auth = yield* AuthService
-        yield* auth.checkRole(args.role)
+        // Use orDie to convert service errors to defects (preserves E type)
+        yield* Effect.orDie(auth.checkRole(args.role))
         return yield* effect
       }),
   }),
 
   // Register executable directive: @log
   // This directive logs when a resolver is executed
-  directive({
+  directive<{ readonly message?: string }, LoggerService>({
     name: "log",
     description: "Logs when this field is accessed",
     locations: [DirectiveLocation.FIELD_DEFINITION],
     args: S.Struct({
       message: S.optional(S.String),
     }),
-    apply: (args: { message?: string }) => <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    apply: (args) => <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.gen(function*() {
         const logger = yield* LoggerService
         yield* logger.log(args.message ?? "Field accessed")
@@ -122,7 +123,7 @@ const builder = GraphQLSchemaBuilder.empty.pipe(
   // Register types
   objectType({ name: "User", schema: UserSchema }),
   objectType({ name: "Secret", schema: SecretSchema }),
-
+).pipe(
   // Public query - no directives
   query("users", {
     type: S.Array(UserSchema),

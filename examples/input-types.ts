@@ -88,7 +88,7 @@ const builder = GraphQLSchemaBuilder.empty.pipe(
 
   // Register output type
   objectType({ name: "User", schema: UserSchema }),
-
+).pipe(
   // Queries
   query("user", {
     type: UserSchema,
@@ -157,13 +157,18 @@ const builder = GraphQLSchemaBuilder.empty.pipe(
         const userIndex = users.findIndex(u => u.id === args.id)
         if (userIndex === -1) throw new Error(`User ${args.id} not found`)
 
-        const user = users[userIndex]
-        if (args.input.name) user.name = args.input.name
-        if (args.input.email) user.email = args.input.email
-        if (args.input.profile?.bio !== undefined) user.bio = args.input.profile.bio
-        if (args.input.profile?.website !== undefined) user.website = args.input.profile.website
+        const existingUser = users[userIndex]
+        // Create a new user object with updates (Effect Schema types are readonly)
+        const updatedUser: User = {
+          ...existingUser,
+          name: args.input.name ?? existingUser.name,
+          email: args.input.email ?? existingUser.email,
+          bio: args.input.profile?.bio !== undefined ? args.input.profile.bio : existingUser.bio,
+          website: args.input.profile?.website !== undefined ? args.input.profile.website : existingUser.website,
+        }
+        users[userIndex] = updatedUser
 
-        return user
+        return updatedUser
       }),
   }),
 )
