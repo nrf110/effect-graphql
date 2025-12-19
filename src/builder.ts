@@ -902,9 +902,14 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
       for (const field of (ast as any).propertySignatures) {
         const fieldName = String(field.name)
         const fieldSchema = S.make(field.type)
-        fields[fieldName] = {
-          type: this.toGraphQLTypeWithRegistry(fieldSchema, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry)
+        let fieldType = this.toGraphQLTypeWithRegistry(fieldSchema, typeRegistry, interfaceRegistry, enumRegistry, unionRegistry)
+
+        // Make non-optional fields non-null
+        if (!field.isOptional) {
+          fieldType = new GraphQLNonNull(fieldType)
         }
+
+        fields[fieldName] = { type: fieldType }
       }
 
       return fields
