@@ -1,7 +1,39 @@
 import { Effect, Layer, Runtime, Pipeable } from "effect"
 import * as S from "effect/Schema"
+import * as AST from "effect/SchemaAST"
 import { GraphQLSchema, GraphQLObjectType, GraphQLInterfaceType, GraphQLEnumType, GraphQLUnionType, GraphQLInputObjectType, GraphQLFieldConfigMap, GraphQLFieldConfig, GraphQLInputFieldConfigMap, GraphQLList, GraphQLNonNull, graphql } from "graphql"
 import { toGraphQLType, toGraphQLArgs, toGraphQLInputType } from "./schema-mapping"
+
+/**
+ * Extract type name from a schema if it has one.
+ * Supports:
+ * - S.TaggedStruct("Name", {...}) - extracts from _tag literal
+ * - S.TaggedClass()("Name", {...}) - extracts from identifier annotation
+ * - S.Class<T>("Name")({...}) - extracts from identifier annotation
+ */
+function getSchemaName(schema: S.Schema<any, any, any>): string | undefined {
+  const ast = schema.ast
+
+  // Handle Transformation (Schema.Class, TaggedClass)
+  if (ast._tag === "Transformation") {
+    const identifier = AST.getIdentifierAnnotation((ast as any).to)
+    if (identifier._tag === "Some") {
+      return identifier.value
+    }
+  }
+
+  // Handle TypeLiteral (TaggedStruct)
+  if (ast._tag === "TypeLiteral") {
+    const tagProp = (ast as any).propertySignatures.find(
+      (p: any) => String(p.name) === "_tag"
+    )
+    if (tagProp && tagProp.type._tag === "Literal" && typeof tagProp.type.literal === "string") {
+      return tagProp.type.literal
+    }
+  }
+
+  return undefined
+}
 
 /**
  * Configuration for a query or mutation field
@@ -185,13 +217,13 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
    * Register an object type from a schema
    *
    * @param config - Object type configuration
-   * @param config.name - The GraphQL type name
+   * @param config.name - The GraphQL type name (optional if schema is TaggedStruct, TaggedClass, or Schema.Class)
    * @param config.schema - The Effect Schema for this type
    * @param config.implements - Optional array of interface names this type implements
    * @param config.fields - Optional additional/computed fields for this type
    */
   objectType<A, R2 = never>(config: {
-    name: string
+    name?: string
     schema: S.Schema<A, any, any>
     implements?: readonly string[]
     fields?: Record<string, {
@@ -201,7 +233,11 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
       resolve: (parent: A, args: any) => Effect.Effect<any, any, any>
     }>
   }): GraphQLSchemaBuilder<R | R2> {
-    const { name, schema, implements: implementsInterfaces, fields } = config
+    const { schema, implements: implementsInterfaces, fields } = config
+    const name = config.name ?? getSchemaName(schema)
+    if (!name) {
+      throw new Error("objectType requires a name. Either provide one explicitly or use a TaggedStruct/TaggedClass/Schema.Class")
+    }
     const newTypes = new Map(this.types)
     newTypes.set(name, { name, schema, implements: implementsInterfaces })
 
@@ -234,16 +270,20 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
    * Register an interface type from a schema
    *
    * @param config - Interface type configuration
-   * @param config.name - The GraphQL interface name
+   * @param config.name - The GraphQL interface name (optional if schema is TaggedStruct, TaggedClass, or Schema.Class)
    * @param config.schema - The Effect Schema defining interface fields
    * @param config.resolveType - Optional function to resolve concrete type (defaults to value._tag)
    */
   interfaceType(config: {
-    name: string
+    name?: string
     schema: S.Schema<any, any, any>
     resolveType?: (value: any) => string
   }): GraphQLSchemaBuilder<R> {
-    const { name, schema, resolveType } = config
+    const { schema, resolveType } = config
+    const name = config.name ?? getSchemaName(schema)
+    if (!name) {
+      throw new Error("interfaceType requires a name. Either provide one explicitly or use a TaggedStruct/TaggedClass/Schema.Class")
+    }
     const newInterfaces = new Map(this.interfaces)
     newInterfaces.set(name, {
       name,
@@ -329,16 +369,20 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
    * Register an input type
    *
    * @param config - Input type configuration
-   * @param config.name - The GraphQL input type name
+   * @param config.name - The GraphQL input type name (optional if schema is TaggedStruct, TaggedClass, or Schema.Class)
    * @param config.schema - The Effect Schema for this input type
    * @param config.description - Optional description
    */
   inputType(config: {
-    name: string
+    name?: string
     schema: S.Schema<any, any, any>
     description?: string
   }): GraphQLSchemaBuilder<R> {
-    const { name, schema, description } = config
+    const { schema, description } = config
+    const name = config.name ?? getSchemaName(schema)
+    if (!name) {
+      throw new Error("inputType requires a name. Either provide one explicitly or use a TaggedStruct/TaggedClass/Schema.Class")
+    }
     const newInputs = new Map(this.inputs)
     newInputs.set(name, { name, schema, description })
 
@@ -583,6 +627,27 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
   ): any {
     const ast = schema.ast
 
+    // FIRST: Check if this schema matches a registered type (by schema reference or AST)
+    // This must happen before handling transformations so Schema.Class types are matched
+    for (const [typeName, typeReg] of this.types) {
+      if (typeReg.schema === schema || typeReg.schema.ast === ast) {
+        const result = typeRegistry.get(typeName)
+        if (result) {
+          return result
+        }
+      }
+    }
+
+    // Check if this schema matches a registered interface
+    for (const [interfaceName, interfaceReg] of this.interfaces) {
+      if (interfaceReg.schema === schema || interfaceReg.schema.ast === ast) {
+        const result = interfaceRegistry.get(interfaceName)
+        if (result) {
+          return result
+        }
+      }
+    }
+
     // Handle transformations (like S.Array, S.optional, etc)
     if (ast._tag === "Transformation") {
       const toAst = (ast as any).to
@@ -670,26 +735,6 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
       }
     }
 
-    // Check if this schema matches a registered interface (compare by AST)
-    for (const [interfaceName, interfaceReg] of this.interfaces) {
-      if (interfaceReg.schema.ast === ast || interfaceReg.schema === schema) {
-        const result = interfaceRegistry.get(interfaceName)
-        if (result) {
-          return result
-        }
-      }
-    }
-
-    // Check if this schema matches a registered type (compare by AST)
-    for (const [typeName, typeReg] of this.types) {
-      if (typeReg.schema.ast === ast || typeReg.schema === schema) {
-        const result = typeRegistry.get(typeName)
-        if (result) {
-          return result
-        }
-      }
-    }
-
     // Handle tuple types (readonly arrays)
     if (ast._tag === "TupleType") {
       const tupleAst = ast as any
@@ -718,12 +763,25 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     enumRegistry: Map<string, GraphQLEnumType> = new Map(),
     unionRegistry: Map<string, GraphQLUnionType> = new Map()
   ): GraphQLFieldConfigMap<any, any> {
-    const ast = schema.ast
+    let ast = schema.ast
+
+    // Handle Transformation (Schema.Class, TaggedClass)
+    if (ast._tag === "Transformation") {
+      ast = (ast as any).to
+    }
+
+    // Handle Declaration (Schema.Class wraps TypeLiteral in Declaration)
+    if (ast._tag === "Declaration") {
+      const typeParams = (ast as any).typeParameters
+      if (typeParams && typeParams.length > 0 && typeParams[0]._tag === "TypeLiteral") {
+        ast = typeParams[0]
+      }
+    }
 
     if (ast._tag === "TypeLiteral") {
       const fields: GraphQLFieldConfigMap<any, any> = {}
 
-      for (const field of ast.propertySignatures) {
+      for (const field of (ast as any).propertySignatures) {
         const fieldName = String(field.name)
         const fieldSchema = S.make(field.type)
         fields[fieldName] = {
@@ -887,9 +945,10 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
 
 /**
  * Add an object type to the schema builder (pipe-able)
+ * Name is optional if schema is TaggedStruct, TaggedClass, or Schema.Class
  */
 export const objectType = <A, R2 = never>(config: {
-  name: string
+  name?: string
   schema: S.Schema<A, any, any>
   implements?: readonly string[]
   fields?: Record<string, {
@@ -903,9 +962,10 @@ export const objectType = <A, R2 = never>(config: {
 
 /**
  * Add an interface type to the schema builder (pipe-able)
+ * Name is optional if schema is TaggedStruct, TaggedClass, or Schema.Class
  */
 export const interfaceType = (config: {
-  name: string
+  name?: string
   schema: S.Schema<any, any, any>
   resolveType?: (value: any) => string
 }) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R> =>
@@ -933,9 +993,10 @@ export const unionType = (config: {
 
 /**
  * Add an input type to the schema builder (pipe-able)
+ * Name is optional if schema is TaggedStruct, TaggedClass, or Schema.Class
  */
 export const inputType = (config: {
-  name: string
+  name?: string
   schema: S.Schema<any, any, any>
   description?: string
 }) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R> =>
