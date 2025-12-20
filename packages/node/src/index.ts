@@ -1,3 +1,4 @@
+// Configuration types and utilities
 export type {
   GraphiQLConfig,
   GraphQLRouterConfig,
@@ -10,6 +11,11 @@ export {
   GraphQLRouterConfigFromEnv,
 } from "./config"
 
+// GraphiQL HTML generator
 export { graphiqlHtml } from "./graphiql"
 
+// Router factory
 export { makeGraphQLRouter } from "./router"
+
+// Schema builder extension
+export { toRouter } from "./schema-builder-extensions"

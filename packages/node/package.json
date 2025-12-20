@@ -1,0 +1,46 @@
+{
+  "name": "@effect-graphql/node",
+  "version": "0.1.0",
+  "description": "Node.js HTTP server integration for @effect-graphql/core",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "@effect-graphql/core": "^0.1.0",
+    "@effect/platform": "^0.93.0",
+    "@effect/platform-node": "^0.103.0",
+    "effect": "^3.0.0",
+    "graphql": "^16.0.0"
+  },
+  "devDependencies": {
+    "@effect-graphql/core": "*",
+    "@effect/platform": "^0.93.8",
+    "@effect/platform-node": "^0.103.0",
+    "effect": "^3.19.11",
+    "graphql": "^16.0.0"
+  },
+  "keywords": [
+    "effect",
+    "graphql",
+    "node",
+    "http",
+    "server"
+  ],
+  "license": "MIT"
+}

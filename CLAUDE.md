@@ -6,24 +6,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A GraphQL framework for Effect-TS that brings full type safety, composability, and functional programming to GraphQL servers. This is an experimental prototype exploring integration between Effect Schema, Effect's service system, and GraphQL.
 
+## Monorepo Structure
+
+This is a multi-package monorepo using npm workspaces:
+
+```
+effect-graphql/
+├── packages/
+│   ├── core/           # @effect-graphql/core - Core library
+│   │   ├── src/
+│   │   │   ├── builder/        # Schema builder system
+│   │   │   ├── schema-mapping.ts
+│   │   │   ├── context.ts
+│   │   │   ├── error.ts
+│   │   │   ├── loader.ts
+│   │   │   └── resolver-context.ts
+│   │   └── test/
+│   └── node/           # @effect-graphql/node - Node.js server integration
+│       ├── src/
+│       │   ├── router.ts       # makeGraphQLRouter()
+│       │   ├── config.ts
+│       │   ├── graphiql.ts
+│       │   └── schema-builder-extensions.ts  # toRouter()
+│       └── test/
+├── examples/           # Example code
+├── docs/               # Documentation site
+└── package.json        # Workspace root
+```
+
 ## Development Commands
 
 ```bash
-# Build the project
+# Build all packages
 npm run build
 
-# Development mode with watch
-npm run dev
-
-# Run tests
+# Run all tests
 npm test
+
+# Build a specific package
+npm run build -w @effect-graphql/core
+npm run build -w @effect-graphql/node
 ```
 
 ## Core Architecture
 
 ### 1. Schema Mapping System
 
-**File**: `src/schema-mapping.ts`
+**File**: `packages/core/src/schema-mapping.ts`
 
 Converts Effect Schema AST to GraphQL types. Key functions:
 - `toGraphQLType()` - Effect Schema → GraphQL output types
@@ -41,7 +70,7 @@ The mapping traverses Effect's SchemaAST and handles:
 
 ### 2. Schema Builder
 
-**File**: `src/builder/schema-builder.ts`
+**File**: `packages/core/src/builder/schema-builder.ts`
 
 The `GraphQLSchemaBuilder` is an immutable, pipeable builder for constructing GraphQL schemas:
 - Implements `Pipeable.Pipeable` for fluent `.pipe()` syntax
@@ -59,7 +88,7 @@ Type name inference: Automatically extracts names from `S.TaggedStruct`, `S.Tagg
 
 ### 3. Pipe-able API
 
-**File**: `src/builder/pipe-api.ts`
+**File**: `packages/core/src/builder/pipe-api.ts`
 
 Provides standalone functions for use with `.pipe()`:
 ```typescript
@@ -72,7 +101,7 @@ GraphQLSchemaBuilder.empty.pipe(
 
 ### 4. Type Registry System
 
-**File**: `src/builder/type-registry.ts`
+**File**: `packages/core/src/builder/type-registry.ts`
 
 Handles type resolution during schema building:
 - `toGraphQLTypeWithRegistry()` - Checks registered types before falling back to default conversion
@@ -82,7 +111,7 @@ Handles type resolution during schema building:
 
 ### 5. Field Builders
 
-**File**: `src/builder/field-builders.ts`
+**File**: `packages/core/src/builder/field-builders.ts`
 
 Builds GraphQL field configs from registrations:
 - `buildField()` - Query/mutation fields
@@ -92,7 +121,7 @@ Builds GraphQL field configs from registrations:
 
 ### 6. Execution
 
-**File**: `src/builder/execute.ts`
+**File**: `packages/core/src/builder/execute.ts`
 
 Layer-per-request execution model:
 ```typescript
@@ -104,7 +133,7 @@ Creates an Effect runtime from the provided layer and passes it to resolvers via
 
 ### 7. DataLoader Integration
 
-**File**: `src/loader.ts`
+**File**: `packages/core/src/loader.ts`
 
 Type-safe DataLoader helpers using Effect services:
 - `Loader.single()` - One key → one value (e.g., user by ID)
@@ -115,7 +144,7 @@ Type-safe DataLoader helpers using Effect services:
 
 ### 8. Error System
 
-**File**: `src/error.ts`
+**File**: `packages/core/src/error.ts`
 
 Effect-based tagged errors using `Data.TaggedError`:
 - `GraphQLError` - Base error with extensions
@@ -125,11 +154,21 @@ Effect-based tagged errors using `Data.TaggedError`:
 
 ### 9. Context System
 
-**File**: `src/context.ts`
+**File**: `packages/core/src/context.ts`
 
 Request-scoped context using Effect's Context:
 - `GraphQLRequestContext` - Contains headers, query, variables, operationName
 - `makeRequestContextLayer()` - Creates Layer for dependency injection
+
+### 10. Server Integration (Node Package)
+
+**Package**: `@effect-graphql/node`
+
+HTTP server integration using @effect/platform:
+- `makeGraphQLRouter()` - Creates an HttpRouter configured for GraphQL
+- `toRouter()` - Converts a GraphQLSchemaBuilder to an HttpRouter
+- `GraphQLRouterConfigFromEnv` - Effect Config for environment-based configuration
+- `graphiqlHtml()` - CDN-based GraphiQL UI generator
 
 ## Key Design Patterns
 
@@ -148,9 +187,15 @@ Request-scoped context using Effect's Context:
 
 ## Dependencies
 
-Core:
-- `effect` - Effect ecosystem
-- `@effect/platform` / `@effect/platform-node` - HTTP server
-- `graphql` - GraphQL execution
+### @effect-graphql/core
+- `effect` (peer) - Effect ecosystem
+- `graphql` (peer) - GraphQL execution
 - `dataloader` - Batching/caching for resolvers
 - `reflect-metadata` - Decorator metadata
+
+### @effect-graphql/node
+- `@effect-graphql/core` (peer) - Core library
+- `@effect/platform` (peer) - HTTP abstractions
+- `@effect/platform-node` (peer) - Node.js HTTP server
+- `effect` (peer) - Effect ecosystem
+- `graphql` (peer) - GraphQL execution

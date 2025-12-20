@@ -14,7 +14,6 @@ export default defineConfig({
         "src/index.ts", // Re-exports only
         "src/builder/index.ts", // Re-exports only
         "src/builder/types.ts", // Type definitions only
-        "src/server.ts", // Incomplete module
       ],
       thresholds: {
         global: {

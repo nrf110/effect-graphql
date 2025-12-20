@@ -1,0 +1,48 @@
+{
+  "name": "@effect-graphql/core",
+  "version": "0.1.0",
+  "description": "Core GraphQL framework for Effect-TS - schema building, type mapping, and execution",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./builder": {
+      "types": "./dist/builder/index.d.ts",
+      "default": "./dist/builder/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "effect": "^3.0.0",
+    "graphql": "^16.0.0"
+  },
+  "dependencies": {
+    "dataloader": "^2.2.3",
+    "reflect-metadata": "^0.2.2"
+  },
+  "devDependencies": {
+    "effect": "^3.19.11",
+    "graphql": "^16.0.0"
+  },
+  "keywords": [
+    "effect",
+    "graphql",
+    "typescript",
+    "schema",
+    "functional-programming"
+  ],
+  "license": "MIT"
+}

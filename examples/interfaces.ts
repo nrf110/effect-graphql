@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect"
 import * as S from "effect/Schema"
-import { GraphQLSchemaBuilder, execute } from "../src/builder"
+import { GraphQLSchemaBuilder, execute } from "@effect-graphql/core"
 
 /**
  * Example: GraphQL Interface Types

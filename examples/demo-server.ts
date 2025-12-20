@@ -3,7 +3,8 @@ import * as S from "effect/Schema"
 import { HttpPlatform, HttpRouter, HttpServer, HttpServerResponse } from "@effect/platform"
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
 import { createServer } from "node:http"
-import { GraphQLSchemaBuilder, query, makeGraphQLRouter } from "../src"
+import { GraphQLSchemaBuilder, query } from "@effect-graphql/core"
+import { makeGraphQLRouter } from "@effect-graphql/node"
 
 // Example schema with a simple query
 const schema = GraphQLSchemaBuilder.empty

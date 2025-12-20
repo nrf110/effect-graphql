@@ -1,4 +1,3 @@
-export * from './server'
 export * from './builder'
 export * from './schema-mapping'
 export * from './error'

@@ -1,7 +1,7 @@
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "@effect/platform"
 import { Effect, Layer } from "effect"
 import { GraphQLSchema, graphql } from "graphql"
-import type { GraphQLEffectContext } from "../builder/types"
+import type { GraphQLEffectContext } from "@effect-graphql/core"
 import { graphiqlHtml } from "./graphiql"
 import { normalizeConfig, type GraphQLRouterConfigInput } from "./config"
 
