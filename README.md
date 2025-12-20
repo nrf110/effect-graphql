@@ -2,14 +2,14 @@
 
 A GraphQL framework for Effect-TS that brings full type safety, composability, and functional programming to your GraphQL servers.
 
+> **Note:** This is an experimental prototype exploring the integration between Effect Schema, Effect's service system, and GraphQL.
+
 ## Features
 
-- **Type-Safe Resolvers**: Leverage Effect's type system for end-to-end type safety
-- **Error Handling**: Structured error handling with Effect's error channel
-- **Service Integration**: Seamlessly integrate Effect services into your resolvers
-- **Composability**: Build complex resolvers from simple, reusable Effect programs
-- **Concurrency**: Utilize Effect's fiber-based concurrency for high-performance APIs
-- **Resource Safety**: Automatic resource management with Effect's scope system
+- **Type-Safe End-to-End** - Define schemas once with Effect Schema, get TypeScript types and GraphQL types automatically
+- **Effect-Powered Resolvers** - Resolvers are Effect programs with built-in error handling and service injection
+- **Immutable Builder** - Fluent, pipe-able API for composing schemas from reusable parts
+- **Service Integration** - Use Effect's Layer system for dependency injection
 
 ## Installation
 
@@ -20,253 +20,80 @@ npm install effect-graphql effect graphql
 ## Quick Start
 
 ```typescript
-import { Effect, Layer, Context } from "effect"
-import { GraphQLString, GraphQLObjectType } from "graphql"
-import { createSchemaBuilder, resolver } from "effect-graphql"
+import { Effect, Layer } from "effect"
+import * as S from "effect/Schema"
+import { GraphQLSchemaBuilder, execute } from "effect-graphql"
 
-// Define a service
-class GreetingService extends Context.Tag("GreetingService")<
-  GreetingService,
-  { readonly greet: (name: string) => Effect.Effect<string> }
->() {}
-
-const GreetingServiceLive = Layer.succeed(GreetingService, {
-  greet: (name: string) => Effect.succeed(`Hello, ${name}!`)
-})
-
-// Build schema
-const builder = createSchemaBuilder(GreetingServiceLive)
-
-const schema = await builder.build({
-  query: {
-    greet: {
-      type: GraphQLString,
-      args: { name: { type: GraphQLString } },
-      resolve: resolver(({ name }: { name?: string }) =>
-        Effect.gen(function* () {
-          const service = yield* GreetingService
-          return yield* service.greet(name || "World")
-        })
-      )
-    }
-  }
-})
-```
-
-## Core Concepts
-
-### Effect Schema Integration
-
-Define your types once with Effect Schema and derive both TypeScript types and GraphQL types:
-
-```typescript
-import { Schema as S } from "effect"
-import { toGraphQLObjectType, field } from "effect-graphql"
-
-// Define schema with validation
+// Define your schema with Effect Schema
 const UserSchema = S.Struct({
-  id: S.Number,
-  name: S.String.pipe(S.minLength(1), S.maxLength(100)),
-  email: S.String.pipe(S.pattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)),
+  id: S.String,
+  name: S.String,
+  email: S.String,
 })
 
-// Derive TypeScript type
-type User = S.Schema.Type<typeof UserSchema>
-
-// Derive GraphQL type
-const UserType = toGraphQLObjectType("User", UserSchema)
-
-// Define validated arguments
-const CreateUserArgsSchema = S.Struct({
-  name: S.String.pipe(S.minLength(1)),
-  email: S.String.pipe(S.pattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)),
-})
-
-// Use in resolver with automatic validation
-const createUserField = field({
-  type: UserType,
-  argsSchema: CreateUserArgsSchema,
-  resolve: ({ name, email }) => 
-    Effect.gen(function* () {
-      // Arguments are already validated!
-      const service = yield* UserService
-      return yield* service.createUser(name, email)
-    })
-})
-```
-
-This approach gives you:
-- Single source of truth for your data models
-- Automatic argument validation before resolver execution
-- Type safety across your entire stack
-- Rich validation rules (patterns, ranges, custom validators)
-- No manual GraphQL type definitions
-
-### Effect Resolvers
-
-Resolvers are Effect programs that can access services, handle errors, and compose with other Effects:
-
-```typescript
-import { resolver, fieldResolver } from "effect-graphql"
-
-// Simple resolver
-const simpleResolver = resolver((args: { id: string }) =>
-  Effect.succeed({ id: args.id, name: "Example" })
-)
-
-// Resolver with parent value
-const fieldResolver = fieldResolver((parent: User, args: {}) =>
-  Effect.succeed(parent.email)
-)
-```
-
-### Service Integration
-
-Use Effect's Context system to inject dependencies:
-
-```typescript
-class DatabaseService extends Context.Tag("DatabaseService")<
-  DatabaseService,
-  { readonly query: (sql: string) => Effect.Effect<any[]> }
->() {}
-
-const resolver = resolver((args) =>
-  Effect.gen(function* () {
-    const db = yield* DatabaseService
-    const results = yield* db.query("SELECT * FROM users")
-    return results
+// Build your GraphQL schema
+const schema = GraphQLSchemaBuilder.empty
+  .objectType({ name: "User", schema: UserSchema })
+  .query("users", {
+    type: S.Array(UserSchema),
+    resolve: () => Effect.succeed([
+      { id: "1", name: "Alice", email: "alice@example.com" },
+      { id: "2", name: "Bob", email: "bob@example.com" },
+    ]),
   })
-)
-```
-
-### Error Handling
-
-Use structured errors that integrate with GraphQL's error system:
-
-```typescript
-import { ValidationError, NotFoundError } from "effect-graphql"
-
-const resolver = resolver((args: { id: number }) =>
-  args.id > 0
-    ? Effect.succeed({ id: args.id })
-    : Effect.fail(new ValidationError({ message: "ID must be positive" }))
-)
-```
-
-## Architecture
-
-The framework consists of:
-
-- **Schema Builder**: Converts Effect resolvers to GraphQL schema
-- **Resolver System**: Type-safe resolver definitions with Effect integration
-- **Error Types**: Structured error classes for common GraphQL errors
-- **Server Adapters**: HTTP handlers for Node.js and Bun
-- **Context Management**: Request-scoped context with Effect layers
-
-### Relational Fields
-
-Use `objectType()` to create types with computed/relational fields that have their own resolvers:
-
-```typescript
-import { objectType } from "effect-graphql"
-
-// Create User type with a relational orders field
-const UserTypeBuilder = objectType<User, AppLayer>("User", UserSchema)
-  .field("orders", {
-    typeSchema: S.Array(OrderSchema), // Use Effect Schema for type
-    argsSchema: S.Struct({
-      startDate: S.optional(S.String),
-      endDate: S.optional(S.String),
+  .query("user", {
+    type: UserSchema,
+    args: S.Struct({ id: S.String }),
+    resolve: (args) => Effect.succeed({
+      id: args.id,
+      name: "Alice",
+      email: "alice@example.com",
     }),
-    resolve: (parent, args) =>
-      Effect.gen(function* () {
-        const orderService = yield* OrderService
-        return yield* orderService.getOrdersForUser(
-          parent.id,
-          args.startDate,
-          args.endDate
-        )
-      })
   })
+  .buildSchema()
 
-// Register with schema builder to get runtime
-builder.registerObjectType(UserTypeBuilder)
-const UserType = UserTypeBuilder.build()
+// Execute a query
+const result = await Effect.runPromise(
+  execute(schema, Layer.empty)(`
+    query {
+      users { id name email }
+    }
+  `)
+)
 ```
 
-You can use either:
-- `typeSchema`: Effect Schema (recommended) - automatically converts to GraphQL type
-- `type`: GraphQL type directly - for more control or custom types
+## Documentation
 
-This enables:
-- Field-level resolvers with access to parent object
-- Arguments on nested fields (e.g., filtering, pagination)
-- Full Effect integration with services and error handling
-- Type-safe parent and argument types
+For full documentation, guides, and API reference, visit the [documentation site](https://nrf110.github.io/effect-graphql/).
 
-### Class-Based Types
+## Development
 
-For a more object-oriented approach, use `createGraphQLClass` to define types with computed fields:
+```bash
+# Install dependencies
+npm install
 
-```typescript
-import { createGraphQLClass } from "effect-graphql"
+# Build the project
+npm run build
 
-// Define User class with schema and computed fields
-class User extends createGraphQLClass(
-  {
-    id: S.Number,
-    name: S.String,
-    email: S.String,
-  },
-  {
-    // Computed field with arguments
-    orders: {
-      typeSchema: S.Array(OrderSchema),
-      argsSchema: S.Struct({
-        startDate: S.optional(S.String),
-        endDate: S.optional(S.String),
-      }),
-      description: "Get orders for this user",
-      resolve: (parent, args) =>
-        Effect.gen(function* () {
-          const orderService = yield* OrderService
-          return yield* orderService.getOrdersForUser(
-            parent.id,
-            args.startDate,
-            args.endDate
-          )
-        }),
-    },
-    // Simple computed field
-    displayName: {
-      typeSchema: S.String,
-      resolve: (parent) => Effect.succeed(`${parent.name} (${parent.email})`),
-    },
-  }
-) {
-  declare id: number
-  declare name: string
-  declare email: string
-}
+# Run tests
+npm test
 
-// Convert to ObjectTypeBuilder
-const UserTypeBuilder = (User as any).toObjectTypeBuilder("User")
-builder.registerObjectType(UserTypeBuilder)
-const UserType = UserTypeBuilder.build()
+# Development mode with watch
+npm run dev
 ```
 
-This approach:
-- Groups schema fields and computed fields together
-- Provides a class-based API similar to Effect Schema's Class
-- Maintains full type safety and Effect integration
-- Works well for domain-driven design
+## Contributing
 
-## Examples
+Contributions are welcome! Here's how you can help:
 
-- `examples/basic-server.ts` - Basic queries and mutations with validation
-- `examples/schema-validation.ts` - Advanced validation with Effect Schema
-- `examples/relational-fields.ts` - Relational fields with arguments (User → Orders)
-- `examples/class-based.ts` - Class-based type definitions with computed fields
+1. **Report bugs** - Open an issue describing the problem and steps to reproduce
+2. **Suggest features** - Open an issue describing your idea
+3. **Submit PRs** - Fork the repo, make your changes, and open a pull request
+
+Please ensure your code:
+- Passes all existing tests (`npm test`)
+- Includes tests for new functionality
+- Follows the existing code style
 
 ## License
 
