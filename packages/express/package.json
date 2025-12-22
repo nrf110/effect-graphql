@@ -17,7 +17,11 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "test:all": "vitest run",
+    "test:watch": "vitest"
   },
   "peerDependencies": {
     "@effect-graphql/core": "^0.1.0",

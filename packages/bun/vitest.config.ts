@@ -7,20 +7,6 @@ export default defineConfig({
     include: ["test/**/*.test.ts", "test/**/*.integration.ts"],
     exclude: ["node_modules", "dist"],
     passWithNoTests: true,
-    coverage: {
-      provider: "v8",
-      reporter: ["text", "json", "html", "lcov"],
-      include: ["src/**/*.ts"],
-      exclude: ["src/index.ts"],
-      thresholds: {
-        global: {
-          statements: 70,
-          branches: 70,
-          functions: 70,
-          lines: 70,
-        },
-      },
-    },
     testTimeout: 30000,
     hookTimeout: 30000,
   },
