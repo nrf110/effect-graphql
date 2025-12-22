@@ -1,14 +1,13 @@
 import { Layer } from "effect"
 import { HttpRouter } from "@effect/platform"
-import { GraphQLSchemaBuilder } from "@effect-graphql/core"
+import { GraphQLSchemaBuilder } from "../builder/schema-builder"
 import { makeGraphQLRouter } from "./router"
 import type { GraphQLRouterConfigInput } from "./config"
 
 /**
  * Convert a GraphQLSchemaBuilder to an HttpRouter.
  *
- * This is the Node.js server integration that bridges the core
- * GraphQL schema with the @effect/platform HTTP server.
+ * This bridges the GraphQL schema builder with the @effect/platform HTTP server.
  *
  * @param builder - The GraphQL schema builder
  * @param layer - Effect layer providing services required by resolvers
@@ -17,8 +16,7 @@ import type { GraphQLRouterConfigInput } from "./config"
  *
  * @example
  * ```typescript
- * import { GraphQLSchemaBuilder, query } from "@effect-graphql/core"
- * import { toRouter } from "@effect-graphql/node"
+ * import { GraphQLSchemaBuilder, query, toRouter } from "@effect-graphql/core"
  * import { Layer } from "effect"
  * import * as S from "effect/Schema"
  *

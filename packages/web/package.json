@@ -1,7 +1,7 @@
 {
-  "name": "@effect-graphql/node",
+  "name": "@effect-graphql/web",
   "version": "0.1.0",
-  "description": "Node.js HTTP server integration for @effect-graphql/core",
+  "description": "Web standard handler for @effect-graphql/core - works with Cloudflare Workers, Deno, and other WASM runtimes",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -17,28 +17,26 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "clean": "rm -rf dist",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "clean": "rm -rf dist"
   },
   "peerDependencies": {
     "@effect-graphql/core": "^0.1.0",
     "@effect/platform": "^0.94.0",
-    "@effect/platform-node": "^0.87.0",
     "effect": "^3.19.0"
   },
   "devDependencies": {
     "@effect-graphql/core": "*",
     "@effect/platform": "^0.94.0",
-    "@effect/platform-node": "^0.87.0",
     "effect": "^3.19.13"
   },
   "keywords": [
     "effect",
     "graphql",
-    "node",
-    "http",
-    "server"
+    "cloudflare",
+    "workers",
+    "wasm",
+    "web",
+    "deno"
   ],
   "license": "MIT"
 }

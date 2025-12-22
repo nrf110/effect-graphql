@@ -1,10 +1,8 @@
 import { Effect, Layer } from "effect"
 import * as S from "effect/Schema"
-import { HttpPlatform, HttpRouter, HttpServer, HttpServerResponse } from "@effect/platform"
-import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
-import { createServer } from "node:http"
-import { GraphQLSchemaBuilder, query } from "@effect-graphql/core"
-import { makeGraphQLRouter } from "@effect-graphql/node"
+import { HttpRouter, HttpServerResponse } from "@effect/platform"
+import { GraphQLSchemaBuilder, query, makeGraphQLRouter } from "@effect-graphql/core"
+import { serve } from "@effect-graphql/node"
 
 // Example schema with a simple query
 const schema = GraphQLSchemaBuilder.empty
@@ -31,35 +29,17 @@ const graphqlRouter = makeGraphQLRouter(schema, Layer.empty, {
 })
 
 // Build the app with health check and GraphQL routes
-const app = HttpRouter.empty
-  .pipe(
-    HttpRouter.get("/health", HttpServerResponse.json({ status: "ok" })),
-    HttpRouter.concat(graphqlRouter),
-    Effect.catchAllCause((cause) =>
-      HttpServerResponse.json({ error: String(cause) }, { status: 500 })
-    ),
-    HttpServer.serve()
-  )
+const app = HttpRouter.empty.pipe(
+  HttpRouter.get("/health", HttpServerResponse.json({ status: "ok" })),
+  HttpRouter.concat(graphqlRouter)
+)
 
-const listen = (
-  appLayer: Layer.Layer<
-    never,
-    never,
-    HttpPlatform.HttpPlatform | HttpServer.HttpServer
-  >,
-  port: number
-) =>
-  NodeRuntime.runMain(
-    Layer.launch(
-      Layer.provide(
-        appLayer,
-        NodeHttpServer.layer(() => createServer(), { port })
-      )
-    )
-  )
-
-console.log("Starting demo server at http://localhost:11001")
-console.log("GraphQL endpoint: http://localhost:11001/graphql")
-console.log("GraphiQL UI: http://localhost:11001/graphiql")
-
-listen(app, 11001)
+// Start the server using the new simplified API
+serve(app, Layer.empty, {
+  port: 11001,
+  onStart: (url: string) => {
+    console.log(`Starting demo server at ${url}`)
+    console.log(`GraphQL endpoint: ${url}/graphql`)
+    console.log(`GraphiQL UI: ${url}/graphiql`)
+  },
+})

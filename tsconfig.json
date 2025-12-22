@@ -13,6 +13,9 @@
   },
   "references": [
     { "path": "./packages/core" },
-    { "path": "./packages/node" }
+    { "path": "./packages/node" },
+    { "path": "./packages/bun" },
+    { "path": "./packages/web" },
+    { "path": "./packages/express" }
   ]
 }
