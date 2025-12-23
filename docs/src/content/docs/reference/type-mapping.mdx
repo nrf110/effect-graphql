@@ -1,0 +1,376 @@
+---
+title: Type Mapping
+description: How Effect Schema types map to GraphQL types
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Effect GraphQL automatically converts Effect Schema definitions to GraphQL types. This page documents how each Schema type maps to its GraphQL equivalent.
+
+## Primitive Types
+
+| Effect Schema | GraphQL Type | Notes |
+|--------------|--------------|-------|
+| `S.String` | `GraphQLString` | Non-null by default |
+| `S.Number` | `GraphQLFloat` | JavaScript numbers are floats |
+| `S.Boolean` | `GraphQLBoolean` | |
+| `S.BigInt` | `GraphQLString` | Serialized as string |
+| `S.Date` | `GraphQLString` | ISO 8601 format |
+
+### Examples
+
+```typescript
+import * as S from "effect/Schema"
+
+// String field
+S.Struct({ name: S.String })
+// → name: String!
+
+// Number field
+S.Struct({ age: S.Number })
+// → age: Float!
+
+// Boolean field
+S.Struct({ active: S.Boolean })
+// → active: Boolean!
+```
+
+## Nullability
+
+| Effect Schema | GraphQL Type |
+|--------------|--------------|
+| `S.String` | `String!` (non-null) |
+| `S.NullOr(S.String)` | `String` (nullable) |
+| `S.optional(S.String)` | `String` (nullable) |
+| `S.UndefinedOr(S.String)` | `String` (nullable) |
+
+### Examples
+
+```typescript
+S.Struct({
+  required: S.String,              // → required: String!
+  nullable: S.NullOr(S.String),    // → nullable: String
+  optional: S.optional(S.String)   // → optional: String
+})
+```
+
+<Aside type="note">
+GraphQL doesn't distinguish between `null` and `undefined`. Both `NullOr` and `optional` map to nullable GraphQL fields.
+</Aside>
+
+## Arrays
+
+| Effect Schema | GraphQL Type |
+|--------------|--------------|
+| `S.Array(S.String)` | `[String!]!` |
+| `S.NullOr(S.Array(S.String))` | `[String!]` |
+| `S.Array(S.NullOr(S.String))` | `[String]!` |
+
+### Examples
+
+```typescript
+S.Struct({
+  // Non-null array of non-null strings
+  tags: S.Array(S.String)
+  // → tags: [String!]!
+
+  // Nullable array of non-null strings
+  categories: S.NullOr(S.Array(S.String))
+  // → categories: [String!]
+
+  // Non-null array of nullable strings
+  aliases: S.Array(S.NullOr(S.String))
+  // → aliases: [String]!
+})
+```
+
+## Structs (Object Types)
+
+`S.Struct` maps to GraphQL Object types:
+
+```typescript
+const UserSchema = S.Struct({
+  id: S.String,
+  name: S.String,
+  email: S.String,
+  age: S.optional(S.Number)
+})
+
+// Becomes:
+// type User {
+//   id: String!
+//   name: String!
+//   email: String!
+//   age: Float
+// }
+```
+
+### Nested Structs
+
+```typescript
+const AddressSchema = S.Struct({
+  street: S.String,
+  city: S.String
+})
+
+const UserSchema = S.Struct({
+  id: S.String,
+  address: AddressSchema
+})
+
+// Becomes:
+// type Address {
+//   street: String!
+//   city: String!
+// }
+//
+// type User {
+//   id: String!
+//   address: Address!
+// }
+```
+
+## Tagged Types
+
+Tagged types provide automatic type name inference:
+
+### TaggedStruct
+
+```typescript
+const UserSchema = S.TaggedStruct("User", {
+  id: S.String,
+  name: S.String
+})
+
+objectType({ schema: UserSchema })  // Name "User" is inferred
+```
+
+### TaggedClass
+
+```typescript
+class User extends S.TaggedClass<User>()("User", {
+  id: S.String,
+  name: S.String
+}) {}
+
+objectType({ schema: User })  // Name "User" is inferred
+```
+
+### Class
+
+```typescript
+class User extends S.Class<User>("User")({
+  id: S.String,
+  name: S.String
+}) {}
+
+objectType({ schema: User })  // Name "User" is inferred
+```
+
+## Enums
+
+### String Literals
+
+```typescript
+const StatusSchema = S.Literal("ACTIVE", "INACTIVE", "PENDING")
+
+// Register as enum:
+enumType({
+  name: "Status",
+  values: ["ACTIVE", "INACTIVE", "PENDING"]
+})
+```
+
+### Using S.Enums
+
+```typescript
+enum Status {
+  ACTIVE = "ACTIVE",
+  INACTIVE = "INACTIVE"
+}
+
+const StatusSchema = S.Enums(Status)
+
+// Register as enum:
+enumType({
+  name: "Status",
+  values: Object.values(Status)
+})
+```
+
+## Unions
+
+### Tagged Unions
+
+```typescript
+const CatSchema = S.TaggedStruct("Cat", {
+  meows: S.Boolean
+})
+
+const DogSchema = S.TaggedStruct("Dog", {
+  barks: S.Boolean
+})
+
+const PetSchema = S.Union(CatSchema, DogSchema)
+
+// Register types and union:
+objectType({ schema: CatSchema })
+objectType({ schema: DogSchema })
+unionType({
+  name: "Pet",
+  types: ["Cat", "Dog"],
+  resolveType: (value) => value._tag  // Uses the tag
+})
+```
+
+## Input Types
+
+For input types (arguments), the mapping uses the "from" side of transformations:
+
+```typescript
+// Output: Returns Date object
+// Input: Accepts string, transforms to Date
+const DateSchema = S.Date
+
+query("events", {
+  type: S.Array(EventSchema),
+  args: {
+    after: DateSchema  // Client sends ISO string
+  },
+  resolve: ({ after }) => {
+    // `after` is a Date object (transformed from string)
+  }
+})
+```
+
+### Input Object Types
+
+Complex input structures:
+
+```typescript
+const CreateUserInputSchema = S.Struct({
+  name: S.String,
+  email: S.String,
+  role: S.optional(S.Literal("ADMIN", "USER"))
+})
+
+inputType({
+  name: "CreateUserInput",
+  schema: CreateUserInputSchema
+})
+
+mutation("createUser", {
+  type: UserSchema,
+  args: {
+    input: CreateUserInputSchema
+  },
+  resolve: ({ input }) => { ... }
+})
+```
+
+## Transformations
+
+Effect Schema transformations are handled differently for input vs output:
+
+### Output Types (Query/Field Results)
+
+Uses the "to" type (the transformed result):
+
+```typescript
+const DateSchema = S.transform(
+  S.String,     // "from" type
+  S.Date,       // "to" type
+  (s) => new Date(s),
+  (d) => d.toISOString()
+)
+
+// Output: Returns JavaScript Date → serialized as String
+query("now", {
+  type: DateSchema,
+  resolve: () => Effect.succeed(new Date())
+})
+// Returns: "2024-01-15T10:30:00.000Z"
+```
+
+### Input Types (Arguments)
+
+Uses the "from" type (what client sends):
+
+```typescript
+// Client sends: { after: "2024-01-15T00:00:00.000Z" }
+// Resolver receives: { after: Date object }
+```
+
+## Custom Scalars
+
+For custom scalar types, use transformations:
+
+```typescript
+// BigInt as string
+const BigIntSchema = S.transform(
+  S.String,
+  S.BigInt,
+  (s) => BigInt(s),
+  (n) => n.toString()
+)
+
+// JSON as string
+const JsonSchema = S.transform(
+  S.String,
+  S.Unknown,
+  (s) => JSON.parse(s),
+  (v) => JSON.stringify(v)
+)
+```
+
+<Aside type="tip">
+Custom scalars are serialized using the "to" function of the transformation when sending responses, and deserialized using the "from" function when receiving arguments.
+</Aside>
+
+## Type Resolution Order
+
+When building GraphQL types, the schema builder:
+
+1. **Checks registered types first** - Types registered with `objectType()`, `enumType()`, etc.
+2. **Falls back to automatic conversion** - If no registered type matches, converts Schema directly
+
+This allows you to customize how specific types are handled:
+
+```typescript
+// Register custom handling for UserSchema
+objectType({
+  name: "User",
+  schema: UserSchema,
+  description: "A user in the system"
+})
+
+// UserSchema now uses the registered type
+// instead of automatic conversion
+```
+
+## Limitations
+
+Some Schema features don't have direct GraphQL equivalents:
+
+| Effect Schema | Handling |
+|--------------|----------|
+| `S.Tuple` | Converted to `[T!]!` (loses positional info) |
+| `S.Record` | Not directly supported |
+| `S.Map` | Not directly supported |
+| `S.Set` | Converted to array |
+| Refinements | Validation runs, no schema change |
+| Brands | Ignored at GraphQL level |
+
+### Workarounds
+
+For unsupported types, use transformations:
+
+```typescript
+// Record as array of key-value pairs
+const MetadataSchema = S.transform(
+  S.Array(S.Struct({ key: S.String, value: S.String })),
+  S.Record(S.String, S.String),
+  (arr) => Object.fromEntries(arr.map(({ key, value }) => [key, value])),
+  (obj) => Object.entries(obj).map(([key, value]) => ({ key, value }))
+)
+```

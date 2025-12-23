@@ -3,25 +3,46 @@ title: API Reference
 description: Complete API reference for Effect GraphQL
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 Complete reference documentation for Effect GraphQL's APIs.
 
+## Core APIs
+
 <CardGrid>
-  <Card title="GraphQLSchemaBuilder" icon="setting">
-    The main builder class for constructing GraphQL schemas.
-  </Card>
-  <Card title="Pipe Functions" icon="list-format">
-    Standalone functions for use with the pipe API.
-  </Card>
-  <Card title="Type Mapping" icon="random">
-    How Effect Schema types map to GraphQL types.
-  </Card>
-  <Card title="Error Types" icon="warning">
-    Built-in error classes for structured error handling.
-  </Card>
+  <LinkCard
+    title="GraphQLSchemaBuilder"
+    description="The main builder class for constructing GraphQL schemas."
+    href="/effect-graphql/reference/schema-builder"
+  />
+  <LinkCard
+    title="Pipe Functions"
+    description="Standalone functions for use with the pipe API."
+    href="/effect-graphql/reference/pipe-functions"
+  />
+  <LinkCard
+    title="Type Mapping"
+    description="How Effect Schema types map to GraphQL types."
+    href="/effect-graphql/reference/type-mapping"
+  />
+  <LinkCard
+    title="Error Types"
+    description="Built-in error classes for structured error handling."
+    href="/effect-graphql/reference/error-types"
+  />
 </CardGrid>
 
----
+## Integration APIs
 
-*Reference documentation is being expanded. For now, see the inline TypeScript types and the [Guides](/effect-graphql/guides/schema-builder/) for usage examples.*
+<CardGrid>
+  <LinkCard
+    title="Loader API"
+    description="DataLoader integration for batching and caching."
+    href="/effect-graphql/reference/loader-api"
+  />
+  <LinkCard
+    title="Server API"
+    description="HTTP routing and WebSocket server integration."
+    href="/effect-graphql/reference/server-api"
+  />
+</CardGrid>

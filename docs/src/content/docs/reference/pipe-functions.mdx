@@ -1,0 +1,361 @@
+---
+title: Pipe Functions
+description: Standalone functions for the pipe API
+---
+
+Effect GraphQL provides standalone functions that can be used with `.pipe()` for a more functional composition style.
+
+## Import
+
+```typescript
+import {
+  query,
+  mutation,
+  subscription,
+  objectType,
+  interfaceType,
+  unionType,
+  enumType,
+  inputType,
+  field,
+  directive
+} from "@effect-graphql/core"
+```
+
+## Usage
+
+All functions are designed to work with `GraphQLSchemaBuilder.pipe()`:
+
+```typescript
+import { GraphQLSchemaBuilder, query, objectType, field } from "@effect-graphql/core"
+
+const builder = GraphQLSchemaBuilder.empty.pipe(
+  objectType({ name: "User", schema: UserSchema }),
+  query("users", {
+    type: S.Array(UserSchema),
+    resolve: () => Effect.succeed([...])
+  }),
+  field("User", "posts", {
+    type: S.Array(PostSchema),
+    resolve: (user) => Effect.succeed([...])
+  })
+)
+```
+
+## Root Operations
+
+### `query(name, config)`
+
+Add a Query field to the builder.
+
+```typescript
+query("users", {
+  type: S.Array(UserSchema),
+  args: { limit: S.optional(S.Number) },
+  description: "Get all users",
+  resolve: ({ limit }) => Effect.succeed([...])
+})
+```
+
+**Signature:**
+```typescript
+function query<A, E, R>(
+  name: string,
+  config: {
+    type: Schema<A>
+    args?: Record<string, Schema<any>>
+    description?: string
+    deprecationReason?: string
+    resolve: (args: Args) => Effect<A, E, R>
+  }
+): (builder: GraphQLSchemaBuilder<R0>) => GraphQLSchemaBuilder<R0 | R>
+```
+
+### `mutation(name, config)`
+
+Add a Mutation field to the builder.
+
+```typescript
+mutation("createUser", {
+  type: UserSchema,
+  args: {
+    name: S.String,
+    email: S.String
+  },
+  resolve: ({ name, email }) => Effect.gen(function* () {
+    const db = yield* Database
+    return yield* db.createUser({ name, email })
+  })
+})
+```
+
+### `subscription(name, config)`
+
+Add a Subscription field to the builder. The resolver must return a Stream.
+
+```typescript
+subscription("messageAdded", {
+  type: MessageSchema,
+  args: { channelId: S.String },
+  resolve: ({ channelId }) => Effect.gen(function* () {
+    const pubsub = yield* PubSubService
+    return pubsub.subscribe(`channel:${channelId}`)
+  })
+})
+```
+
+## Type Definitions
+
+### `objectType(config)`
+
+Register a GraphQL Object type.
+
+```typescript
+objectType({
+  name: "User",
+  schema: S.Struct({
+    id: S.String,
+    name: S.String,
+    email: S.String
+  }),
+  description: "A user in the system"
+})
+
+// With TaggedStruct (name is inferred)
+objectType({
+  schema: S.TaggedStruct("User", {
+    id: S.String,
+    name: S.String
+  })
+})
+```
+
+### `interfaceType(config)`
+
+Register a GraphQL Interface type.
+
+```typescript
+interfaceType({
+  name: "Node",
+  schema: S.Struct({
+    id: S.String
+  }),
+  description: "An object with a global ID"
+})
+```
+
+### `unionType(config)`
+
+Register a GraphQL Union type.
+
+```typescript
+unionType({
+  name: "SearchResult",
+  types: ["User", "Post", "Comment"],
+  resolveType: (value) => {
+    if ("email" in value) return "User"
+    if ("title" in value) return "Post"
+    return "Comment"
+  }
+})
+```
+
+### `enumType(config)`
+
+Register a GraphQL Enum type.
+
+```typescript
+// Simple enum
+enumType({
+  name: "Status",
+  values: ["ACTIVE", "INACTIVE", "PENDING"]
+})
+
+// With value descriptions
+enumType({
+  name: "Priority",
+  values: {
+    LOW: { description: "Low priority" },
+    MEDIUM: { description: "Medium priority" },
+    HIGH: { description: "High priority" }
+  }
+})
+```
+
+### `inputType(config)`
+
+Register a GraphQL Input type.
+
+```typescript
+inputType({
+  name: "CreateUserInput",
+  schema: S.Struct({
+    name: S.String,
+    email: S.String,
+    role: S.optional(S.String)
+  })
+})
+```
+
+## Field Registration
+
+### `field(typeName, fieldName, config)`
+
+Add a field to an existing object type.
+
+```typescript
+field("User", "posts", {
+  type: S.Array(PostSchema),
+  args: {
+    limit: S.optional(S.Number),
+    offset: S.optional(S.Number)
+  },
+  description: "Posts authored by this user",
+  resolve: (user, { limit, offset }) => Effect.gen(function* () {
+    const db = yield* Database
+    return yield* db.getPostsByUserId(user.id, { limit, offset })
+  })
+})
+```
+
+**Signature:**
+```typescript
+function field<Parent, A, E, R>(
+  typeName: string,
+  fieldName: string,
+  config: {
+    type: Schema<A>
+    args?: Record<string, Schema<any>>
+    description?: string
+    deprecationReason?: string
+    resolve: (parent: Parent, args: Args) => Effect<A, E, R>
+  }
+): (builder: GraphQLSchemaBuilder<R0>) => GraphQLSchemaBuilder<R0 | R>
+```
+
+## Directives
+
+### `directive(name, config)`
+
+Register a custom directive.
+
+```typescript
+directive("auth", {
+  locations: ["FIELD_DEFINITION"],
+  args: {
+    roles: S.optional(S.Array(S.String))
+  },
+  description: "Require authentication with optional role check",
+  transformer: (next, { roles }, info) => Effect.gen(function* () {
+    const auth = yield* AuthContext
+
+    if (!auth.user) {
+      return yield* Effect.fail(new AuthorizationError({
+        message: "Authentication required"
+      }))
+    }
+
+    if (roles && !roles.includes(auth.user.role)) {
+      return yield* Effect.fail(new AuthorizationError({
+        message: `Required role: ${roles.join(" or ")}`
+      }))
+    }
+
+    return yield* next
+  })
+})
+```
+
+**Directive Locations:**
+- `QUERY`, `MUTATION`, `SUBSCRIPTION`
+- `FIELD`, `FIELD_DEFINITION`
+- `OBJECT`, `INTERFACE`, `UNION`, `ENUM`, `INPUT_OBJECT`
+- `SCALAR`, `ARGUMENT_DEFINITION`, `ENUM_VALUE`, `INPUT_FIELD_DEFINITION`
+
+## Composition Patterns
+
+### Sequential Registration
+
+```typescript
+const builder = GraphQLSchemaBuilder.empty.pipe(
+  // Types first
+  objectType({ name: "User", schema: UserSchema }),
+  objectType({ name: "Post", schema: PostSchema }),
+
+  // Then queries
+  query("users", { ... }),
+  query("posts", { ... }),
+
+  // Then relational fields
+  field("User", "posts", { ... }),
+  field("Post", "author", { ... })
+)
+```
+
+### Modular Composition
+
+```typescript
+// users.ts
+export const userModule = (builder: GraphQLSchemaBuilder<any>) =>
+  builder.pipe(
+    objectType({ name: "User", schema: UserSchema }),
+    query("users", { ... }),
+    query("user", { ... }),
+    mutation("createUser", { ... })
+  )
+
+// posts.ts
+export const postModule = (builder: GraphQLSchemaBuilder<any>) =>
+  builder.pipe(
+    objectType({ name: "Post", schema: PostSchema }),
+    query("posts", { ... }),
+    field("User", "posts", { ... })
+  )
+
+// schema.ts
+const builder = GraphQLSchemaBuilder.empty.pipe(
+  userModule,
+  postModule
+)
+```
+
+### Conditional Registration
+
+```typescript
+const withAdminFeatures = process.env.ENABLE_ADMIN === "true"
+
+const builder = GraphQLSchemaBuilder.empty.pipe(
+  query("users", { ... }),
+
+  // Conditionally add admin features
+  ...(withAdminFeatures ? [
+    query("adminStats", { ... }),
+    mutation("deleteUser", { ... })
+  ] : [])
+)
+```
+
+## Type Inference
+
+All pipe functions correctly infer and accumulate service requirements:
+
+```typescript
+const builder = GraphQLSchemaBuilder.empty.pipe(
+  query("users", {
+    type: S.Array(UserSchema),
+    resolve: () => Effect.gen(function* () {
+      const db = yield* Database     // Adds Database to R
+      return yield* db.getUsers()
+    })
+  }),
+
+  query("posts", {
+    type: S.Array(PostSchema),
+    resolve: () => Effect.gen(function* () {
+      const cache = yield* CacheService  // Adds CacheService to R
+      return yield* cache.getPosts()
+    })
+  })
+)
+// Type: GraphQLSchemaBuilder<Database | CacheService>
+```

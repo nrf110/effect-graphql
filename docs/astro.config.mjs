@@ -28,11 +28,22 @@ export default defineConfig({
 						{ label: 'Schema Builder', slug: 'guides/schema-builder' },
 						{ label: 'Resolvers', slug: 'guides/resolvers' },
 						{ label: 'Error Handling', slug: 'guides/error-handling' },
+						{ label: 'Server Integration', slug: 'guides/server-integration' },
+						{ label: 'Subscriptions', slug: 'guides/subscriptions' },
+						{ label: 'DataLoader', slug: 'guides/dataloader' },
 					],
 				},
 				{
 					label: 'Reference',
-					autogenerate: { directory: 'reference' },
+					items: [
+						{ label: 'Overview', slug: 'reference' },
+						{ label: 'GraphQLSchemaBuilder', slug: 'reference/schema-builder' },
+						{ label: 'Pipe Functions', slug: 'reference/pipe-functions' },
+						{ label: 'Type Mapping', slug: 'reference/type-mapping' },
+						{ label: 'Error Types', slug: 'reference/error-types' },
+						{ label: 'Loader API', slug: 'reference/loader-api' },
+						{ label: 'Server API', slug: 'reference/server-api' },
+					],
 				},
 				{
 					label: 'Examples',

@@ -1,0 +1,414 @@
+---
+title: Error Types
+description: Built-in error classes for structured error handling
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Effect GraphQL provides built-in error types using Effect's `Data.TaggedError`. These errors integrate with GraphQL's error handling and provide structured information in responses.
+
+## Import
+
+```typescript
+import {
+  GraphQLError,
+  ValidationError,
+  AuthorizationError,
+  NotFoundError
+} from "@effect-graphql/core"
+```
+
+## Base Error
+
+### `GraphQLError`
+
+The base error type for all GraphQL-related errors.
+
+```typescript
+class GraphQLError extends Data.TaggedError("GraphQLError")<{
+  readonly message: string
+  readonly extensions?: Record<string, unknown>
+}>
+```
+
+**Usage:**
+
+```typescript
+import { GraphQLError } from "@effect-graphql/core"
+import { Effect } from "effect"
+
+const resolver = () => Effect.fail(
+  new GraphQLError({
+    message: "Something went wrong",
+    extensions: {
+      code: "INTERNAL_ERROR",
+      timestamp: Date.now()
+    }
+  })
+)
+```
+
+**GraphQL Response:**
+
+```json
+{
+  "errors": [{
+    "message": "Something went wrong",
+    "extensions": {
+      "code": "INTERNAL_ERROR",
+      "timestamp": 1705320600000
+    }
+  }]
+}
+```
+
+## Specialized Errors
+
+### `ValidationError`
+
+For input validation failures.
+
+```typescript
+class ValidationError extends Data.TaggedError("ValidationError")<{
+  readonly message: string
+  readonly field?: string
+  readonly extensions?: Record<string, unknown>
+}>
+```
+
+**Usage:**
+
+```typescript
+import { ValidationError } from "@effect-graphql/core"
+
+mutation("createUser", {
+  type: UserSchema,
+  args: { email: S.String },
+  resolve: ({ email }) => Effect.gen(function* () {
+    if (!email.includes("@")) {
+      return yield* Effect.fail(
+        new ValidationError({
+          message: "Invalid email format",
+          field: "email"
+        })
+      )
+    }
+    // ...
+  })
+})
+```
+
+**GraphQL Response:**
+
+```json
+{
+  "errors": [{
+    "message": "Invalid email format",
+    "extensions": {
+      "code": "VALIDATION_ERROR",
+      "field": "email"
+    }
+  }]
+}
+```
+
+### `AuthorizationError`
+
+For access control failures.
+
+```typescript
+class AuthorizationError extends Data.TaggedError("AuthorizationError")<{
+  readonly message: string
+  readonly extensions?: Record<string, unknown>
+}>
+```
+
+**Usage:**
+
+```typescript
+import { AuthorizationError } from "@effect-graphql/core"
+
+query("adminStats", {
+  type: StatsSchema,
+  resolve: () => Effect.gen(function* () {
+    const auth = yield* AuthContext
+    if (auth.user?.role !== "ADMIN") {
+      return yield* Effect.fail(
+        new AuthorizationError({
+          message: "Admin access required"
+        })
+      )
+    }
+    // ...
+  })
+})
+```
+
+**GraphQL Response:**
+
+```json
+{
+  "errors": [{
+    "message": "Admin access required",
+    "extensions": {
+      "code": "AUTHORIZATION_ERROR"
+    }
+  }]
+}
+```
+
+### `NotFoundError`
+
+For missing resources.
+
+```typescript
+class NotFoundError extends Data.TaggedError("NotFoundError")<{
+  readonly message: string
+  readonly resourceType?: string
+  readonly resourceId?: string
+  readonly extensions?: Record<string, unknown>
+}>
+```
+
+**Usage:**
+
+```typescript
+import { NotFoundError } from "@effect-graphql/core"
+
+query("user", {
+  type: UserSchema,
+  args: { id: S.String },
+  resolve: ({ id }) => Effect.gen(function* () {
+    const db = yield* Database
+    const user = yield* db.findUser(id)
+    if (!user) {
+      return yield* Effect.fail(
+        new NotFoundError({
+          message: `User not found: ${id}`,
+          resourceType: "User",
+          resourceId: id
+        })
+      )
+    }
+    return user
+  })
+})
+```
+
+**GraphQL Response:**
+
+```json
+{
+  "errors": [{
+    "message": "User not found: 123",
+    "extensions": {
+      "code": "NOT_FOUND",
+      "resourceType": "User",
+      "resourceId": "123"
+    }
+  }]
+}
+```
+
+## Creating Custom Errors
+
+Extend the base error or create new tagged errors:
+
+```typescript
+import { Data } from "effect"
+
+// Custom error with additional fields
+class RateLimitError extends Data.TaggedError("RateLimitError")<{
+  readonly message: string
+  readonly retryAfter: number
+  readonly limit: number
+}> {}
+
+// Usage
+const resolver = () => Effect.fail(
+  new RateLimitError({
+    message: "Rate limit exceeded",
+    retryAfter: 60,
+    limit: 100
+  })
+)
+```
+
+**GraphQL Response:**
+
+```json
+{
+  "errors": [{
+    "message": "Rate limit exceeded",
+    "extensions": {
+      "code": "RATE_LIMIT_ERROR",
+      "retryAfter": 60,
+      "limit": 100
+    }
+  }]
+}
+```
+
+## Error Handling Patterns
+
+### Catching Specific Errors
+
+```typescript
+import { Effect } from "effect"
+import { NotFoundError } from "@effect-graphql/core"
+
+query("userOrDefault", {
+  type: UserSchema,
+  args: { id: S.String },
+  resolve: ({ id }) =>
+    getUserById(id).pipe(
+      Effect.catchTag("NotFoundError", () =>
+        Effect.succeed(defaultUser)
+      )
+    )
+})
+```
+
+### Transforming Errors
+
+```typescript
+import { Effect } from "effect"
+
+const resolve = ({ id }) =>
+  db.findUser(id).pipe(
+    Effect.catchAll((dbError) =>
+      Effect.fail(
+        new GraphQLError({
+          message: "Database error",
+          extensions: {
+            code: "DATABASE_ERROR",
+            originalError: dbError.message
+          }
+        })
+      )
+    )
+  )
+```
+
+### Multiple Error Types
+
+```typescript
+type ResolverError =
+  | ValidationError
+  | AuthorizationError
+  | NotFoundError
+
+const resolver = (): Effect.Effect<User, ResolverError, Database> =>
+  Effect.gen(function* () {
+    const auth = yield* AuthContext
+    if (!auth.user) {
+      return yield* Effect.fail(
+        new AuthorizationError({ message: "Login required" })
+      )
+    }
+    // ...
+  })
+```
+
+## Error Serialization
+
+Errors are automatically serialized to GraphQL error format:
+
+| Error Property | GraphQL Location |
+|---------------|------------------|
+| `message` | `errors[].message` |
+| `_tag` | `errors[].extensions.code` |
+| Other fields | `errors[].extensions.*` |
+
+<Aside type="note">
+The error's `_tag` is converted to a `code` in extensions using SCREAMING_SNAKE_CASE. For example, `NotFoundError` becomes `NOT_FOUND`.
+</Aside>
+
+## Effect Schema Validation Errors
+
+When Effect Schema validation fails on input arguments, a `ValidationError` is automatically generated:
+
+```typescript
+mutation("createUser", {
+  type: UserSchema,
+  args: {
+    age: S.Number.pipe(S.int(), S.positive())
+  },
+  resolve: ({ age }) => { ... }
+})
+
+// Client sends: { age: -5 }
+// Response:
+{
+  "errors": [{
+    "message": "Expected positive number, got -5",
+    "extensions": {
+      "code": "VALIDATION_ERROR",
+      "field": "age"
+    }
+  }]
+}
+```
+
+## Best Practices
+
+### 1. Use Specific Error Types
+
+```typescript
+// Good - Specific error type
+Effect.fail(new NotFoundError({
+  message: "User not found",
+  resourceType: "User",
+  resourceId: id
+}))
+
+// Avoid - Generic error
+Effect.fail(new Error("User not found"))
+```
+
+### 2. Include Helpful Extensions
+
+```typescript
+new ValidationError({
+  message: "Invalid email format",
+  field: "email",
+  extensions: {
+    expected: "valid email address",
+    received: email,
+    suggestion: "Check for missing @ symbol"
+  }
+})
+```
+
+### 3. Don't Expose Internal Details
+
+```typescript
+// Good - User-friendly message
+new GraphQLError({
+  message: "Unable to process request"
+})
+
+// Avoid - Exposes internals
+new GraphQLError({
+  message: `PostgreSQL error: relation "users" does not exist`
+})
+```
+
+### 4. Log Internal Errors
+
+```typescript
+const resolver = () =>
+  internalOperation().pipe(
+    Effect.catchAll((error) =>
+      Effect.gen(function* () {
+        // Log internally
+        yield* Logger.error("Internal error", { error })
+
+        // Return sanitized error
+        return yield* Effect.fail(
+          new GraphQLError({ message: "Internal error" })
+        )
+      })
+    )
+  )
+```

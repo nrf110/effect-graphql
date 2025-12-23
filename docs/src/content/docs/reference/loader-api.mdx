@@ -1,0 +1,368 @@
+---
+title: Loader API
+description: DataLoader integration for batching and caching
+---
+
+The `Loader` module provides type-safe DataLoader helpers that integrate with Effect's service system.
+
+## Import
+
+```typescript
+import { Loader } from "@effect-graphql/core"
+```
+
+## Loader Functions
+
+### `Loader.single(config)`
+
+Create a single-value loader definition. One key maps to exactly one value.
+
+```typescript
+function single<K, V, R = never>(config: {
+  batch: (keys: readonly K[]) => Effect.Effect<readonly V[], Error, R>
+  key: (value: V) => K
+}): SingleLoaderDef<K, V, R>
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `batch` | `(keys: K[]) => Effect<V[]>` | Function to load multiple values |
+| `key` | `(value: V) => K` | Extract key from a value |
+
+**Example:**
+
+```typescript
+Loader.single<string, User>({
+  batch: (ids) => Effect.gen(function* () {
+    const db = yield* Database
+    return yield* db.getUsersByIds(ids)
+  }),
+  key: (user) => user.id
+})
+```
+
+### `Loader.grouped(config)`
+
+Create a grouped loader definition. One key maps to multiple values.
+
+```typescript
+function grouped<K, V, R = never>(config: {
+  batch: (keys: readonly K[]) => Effect.Effect<readonly V[], Error, R>
+  groupBy: (value: V) => K
+}): GroupedLoaderDef<K, V, R>
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `batch` | `(keys: K[]) => Effect<V[]>` | Function to load values for multiple keys |
+| `groupBy` | `(value: V) => K` | Extract grouping key from a value |
+
+**Example:**
+
+```typescript
+Loader.grouped<string, Post>({
+  batch: (authorIds) => Effect.gen(function* () {
+    const db = yield* Database
+    return yield* db.getPostsByAuthorIds(authorIds)
+  }),
+  groupBy: (post) => post.authorId
+})
+```
+
+### `Loader.define(definitions)`
+
+Create a loader registry from a set of loader definitions.
+
+```typescript
+function define<Defs extends Record<string, LoaderDef<any, any, any>>>(
+  definitions: Defs
+): LoaderRegistry<Defs>
+```
+
+**Example:**
+
+```typescript
+const loaders = Loader.define({
+  UserById: Loader.single<string, User>({
+    batch: (ids) => db.getUsersByIds(ids),
+    key: (user) => user.id
+  }),
+  PostsByAuthorId: Loader.grouped<string, Post>({
+    batch: (authorIds) => db.getPostsByAuthorIds(authorIds),
+    groupBy: (post) => post.authorId
+  })
+})
+```
+
+## LoaderRegistry
+
+The registry returned by `Loader.define()` provides methods for creating layers and loading data.
+
+### `registry.toLayer()`
+
+Create an Effect Layer that provides fresh DataLoader instances.
+
+```typescript
+toLayer(): Layer.Layer<LoaderInstances<Defs>, never, LoaderRequirements<Defs>>
+```
+
+**Example:**
+
+```typescript
+const loaders = Loader.define({ ... })
+
+// Create layer (typically once per request)
+const loaderLayer = loaders.toLayer()
+
+// Merge with other service layers
+const serviceLayer = Layer.mergeAll(
+  DatabaseLive,
+  loaderLayer
+)
+```
+
+### `registry.load(name, key)`
+
+Load a single value by its key.
+
+```typescript
+load<Name extends keyof Defs>(
+  name: Name,
+  key: LoaderKey<Defs[Name]>
+): Effect.Effect<LoaderValue<Defs[Name]>, Error, LoaderInstances<Defs>>
+```
+
+**Returns:**
+- For single loaders: the value `V`
+- For grouped loaders: an array `V[]`
+
+**Example:**
+
+```typescript
+// Single loader - returns User
+const user = yield* loaders.load("UserById", "123")
+
+// Grouped loader - returns Post[]
+const posts = yield* loaders.load("PostsByAuthorId", "123")
+```
+
+### `registry.loadMany(name, keys)`
+
+Load multiple values by their keys. All keys are batched into a single request.
+
+```typescript
+loadMany<Name extends keyof Defs>(
+  name: Name,
+  keys: readonly LoaderKey<Defs[Name]>[]
+): Effect.Effect<readonly LoaderValue<Defs[Name]>[], Error, LoaderInstances<Defs>>
+```
+
+**Example:**
+
+```typescript
+const users = yield* loaders.loadMany("UserById", ["1", "2", "3"])
+// Returns: [User, User, User]
+```
+
+### `registry.use(callback)`
+
+Direct access to DataLoader instances for advanced use cases.
+
+```typescript
+use<A>(
+  fn: (loaders: LoaderInstances<Defs>) => Promise<A>
+): Effect.Effect<A, Error, LoaderInstances<Defs>>
+```
+
+**Example:**
+
+```typescript
+const result = yield* loaders.use(async (instances) => {
+  // Direct DataLoader access
+  const user = await instances.UserById.load("123")
+  const posts = await instances.PostsByAuthorId.load("123")
+  return { user, posts }
+})
+```
+
+### `registry.Service`
+
+The Effect Context tag for the loader instances.
+
+```typescript
+readonly Service: Context.Tag<LoaderInstances<Defs>, LoaderInstances<Defs>>
+```
+
+**Example:**
+
+```typescript
+// Access loaders via Context
+const program = Effect.gen(function* () {
+  const instances = yield* loaders.Service
+  // Use instances directly
+})
+```
+
+## Utility Functions
+
+### `Loader.mapByKey(keys, items, keyFn)`
+
+Map an array of items to match requested keys. Useful in batch functions to ensure correct ordering.
+
+```typescript
+function mapByKey<K, V>(
+  keys: readonly K[],
+  items: readonly V[],
+  keyFn: (item: V) => K
+): (V | Error)[]
+```
+
+**Example:**
+
+```typescript
+batch: (ids) => Effect.gen(function* () {
+  const db = yield* Database
+  const users = yield* db.getUsersByIds(ids)
+
+  // Ensure results match key order
+  // Missing items become Error instances
+  return Loader.mapByKey(ids, users, (user) => user.id)
+})
+```
+
+### `Loader.groupByKey(keys, items, keyFn)`
+
+Group items by a key function. Returns a Map from key to array of items.
+
+```typescript
+function groupByKey<K, V>(
+  keys: readonly K[],
+  items: readonly V[],
+  keyFn: (item: V) => K
+): Map<K, V[]>
+```
+
+**Example:**
+
+```typescript
+const posts = [
+  { id: "1", authorId: "alice", title: "Post 1" },
+  { id: "2", authorId: "bob", title: "Post 2" },
+  { id: "3", authorId: "alice", title: "Post 3" }
+]
+
+const grouped = Loader.groupByKey(
+  ["alice", "bob"],
+  posts,
+  (post) => post.authorId
+)
+// Map {
+//   "alice" => [Post1, Post3],
+//   "bob" => [Post2]
+// }
+```
+
+## Type Definitions
+
+### `SingleLoaderDef<K, V, R>`
+
+Definition for a single-value loader.
+
+```typescript
+interface SingleLoaderDef<K, V, R> {
+  readonly _tag: "single"
+  readonly batch: (keys: readonly K[]) => Effect.Effect<readonly V[], Error, R>
+  readonly key: (value: V) => K
+}
+```
+
+### `GroupedLoaderDef<K, V, R>`
+
+Definition for a grouped loader.
+
+```typescript
+interface GroupedLoaderDef<K, V, R> {
+  readonly _tag: "grouped"
+  readonly batch: (keys: readonly K[]) => Effect.Effect<readonly V[], Error, R>
+  readonly groupBy: (value: V) => K
+}
+```
+
+### `LoaderDef<K, V, R>`
+
+Union of loader definition types.
+
+```typescript
+type LoaderDef<K, V, R> = SingleLoaderDef<K, V, R> | GroupedLoaderDef<K, V, R>
+```
+
+### `LoaderRegistry<Defs>`
+
+The registry class returned by `Loader.define()`.
+
+```typescript
+class LoaderRegistry<Defs extends Record<string, LoaderDef<any, any, any>>> {
+  readonly definitions: Defs
+  readonly Service: Context.Tag<LoaderInstances<Defs>>
+
+  toLayer(): Layer.Layer<LoaderInstances<Defs>, never, LoaderRequirements<Defs>>
+  load<Name>(name: Name, key: K): Effect.Effect<V, Error, LoaderInstances<Defs>>
+  loadMany<Name>(name: Name, keys: K[]): Effect.Effect<V[], Error, LoaderInstances<Defs>>
+  use<A>(fn: (loaders) => Promise<A>): Effect.Effect<A, Error, LoaderInstances<Defs>>
+}
+```
+
+## Complete Example
+
+```typescript
+import { GraphQLSchemaBuilder, query, field, Loader } from "@effect-graphql/core"
+import { Effect, Context, Layer } from "effect"
+import * as S from "effect/Schema"
+
+// Database service
+class Database extends Context.Tag("Database")<Database, {
+  getUsersByIds: (ids: readonly string[]) => Effect.Effect<User[]>
+  getPostsByAuthorIds: (ids: readonly string[]) => Effect.Effect<Post[]>
+}>() {}
+
+// Define loaders
+const loaders = Loader.define({
+  UserById: Loader.single<string, User>({
+    batch: (ids) => Effect.flatMap(Database, (db) => db.getUsersByIds(ids)),
+    key: (user) => user.id
+  }),
+
+  PostsByAuthorId: Loader.grouped<string, Post>({
+    batch: (ids) => Effect.flatMap(Database, (db) => db.getPostsByAuthorIds(ids)),
+    groupBy: (post) => post.authorId
+  })
+})
+
+// Build schema using loaders
+const builder = GraphQLSchemaBuilder.empty.pipe(
+  query("users", {
+    type: S.Array(UserSchema),
+    resolve: () => Effect.flatMap(Database, (db) => db.getAllUsers())
+  }),
+
+  field("User", "posts", {
+    type: S.Array(PostSchema),
+    resolve: (user) => loaders.load("PostsByAuthorId", user.id)
+  }),
+
+  field("Post", "author", {
+    type: UserSchema,
+    resolve: (post) => loaders.load("UserById", post.authorId)
+  })
+)
+
+// Create layer with loaders
+const serviceLayer = Layer.mergeAll(
+  DatabaseLive,
+  loaders.toLayer()
+)
+```

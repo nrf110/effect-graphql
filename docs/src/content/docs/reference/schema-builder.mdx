@@ -1,0 +1,356 @@
+---
+title: GraphQLSchemaBuilder
+description: API reference for the GraphQL schema builder
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The `GraphQLSchemaBuilder` is an immutable, pipeable builder for constructing GraphQL schemas. It accumulates type definitions and resolver registrations, then builds a standard `GraphQLSchema`.
+
+## Import
+
+```typescript
+import { GraphQLSchemaBuilder } from "@effect-graphql/core"
+```
+
+## Creating a Builder
+
+### `GraphQLSchemaBuilder.empty`
+
+Creates a new empty schema builder.
+
+```typescript
+const builder = GraphQLSchemaBuilder.empty
+// Type: GraphQLSchemaBuilder<never>
+```
+
+The type parameter `R` tracks accumulated service requirements from resolvers.
+
+## Root Operation Methods
+
+### `query(name, config)`
+
+Register a Query field.
+
+```typescript
+builder.query("users", {
+  type: S.Array(UserSchema),
+  args?: { ... },
+  description?: "...",
+  deprecationReason?: "...",
+  resolve: (args) => Effect.succeed([...])
+})
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `name` | `string` | Field name |
+| `config.type` | `Schema<A>` | Return type schema |
+| `config.args` | `Record<string, Schema>` | Optional arguments |
+| `config.description` | `string` | Optional field description |
+| `config.deprecationReason` | `string` | Mark field as deprecated |
+| `config.resolve` | `(args) => Effect<A, E, R>` | Resolver function |
+
+**Returns:** `GraphQLSchemaBuilder<R | R2>` (accumulates service requirements)
+
+### `mutation(name, config)`
+
+Register a Mutation field. Same signature as `query()`.
+
+```typescript
+builder.mutation("createUser", {
+  type: UserSchema,
+  args: { name: S.String, email: S.String },
+  resolve: ({ name, email }) => Effect.gen(function* () {
+    const db = yield* Database
+    return yield* db.createUser({ name, email })
+  })
+})
+```
+
+### `subscription(name, config)`
+
+Register a Subscription field. The resolver must return a `Stream`.
+
+```typescript
+builder.subscription("messageAdded", {
+  type: MessageSchema,
+  args: { channelId: S.String },
+  resolve: ({ channelId }) => Effect.gen(function* () {
+    const pubsub = yield* PubSubService
+    return pubsub.subscribe(`channel:${channelId}`)
+  })
+})
+```
+
+**Returns:** The resolver must return `Effect<Stream<A>, E, R>`.
+
+## Type Registration Methods
+
+### `objectType(config)`
+
+Register a GraphQL Object type.
+
+```typescript
+builder.objectType({
+  name: "User",           // Required for plain structs
+  schema: UserSchema,
+  description?: "..."
+})
+
+// Name is optional for TaggedStruct/TaggedClass/Class
+builder.objectType({
+  schema: S.TaggedStruct("User", { id: S.String, name: S.String })
+})
+```
+
+**Type Name Inference:**
+- `S.TaggedStruct("Name", {...})` → Name extracted from tag
+- `S.TaggedClass("Name")` → Name extracted from tag
+- `S.Class("Name")` → Name extracted from class
+- Plain `S.Struct({...})` → Requires explicit `name` parameter
+
+### `interfaceType(config)`
+
+Register a GraphQL Interface type.
+
+```typescript
+builder.interfaceType({
+  name: "Node",
+  schema: NodeSchema,
+  description?: "..."
+})
+```
+
+### `unionType(config)`
+
+Register a GraphQL Union type.
+
+```typescript
+builder.unionType({
+  name: "SearchResult",
+  types: ["User", "Post", "Comment"],
+  description?: "...",
+  resolveType?: (value) => {
+    // Return the type name based on the value
+    if ("email" in value) return "User"
+    if ("title" in value) return "Post"
+    return "Comment"
+  }
+})
+```
+
+### `enumType(config)`
+
+Register a GraphQL Enum type.
+
+```typescript
+builder.enumType({
+  name: "Status",
+  values: ["ACTIVE", "INACTIVE", "PENDING"],
+  description?: "..."
+})
+
+// Or with descriptions per value
+builder.enumType({
+  name: "Status",
+  values: {
+    ACTIVE: { description: "Currently active" },
+    INACTIVE: { description: "Disabled" },
+    PENDING: { description: "Awaiting approval" }
+  }
+})
+```
+
+### `inputType(config)`
+
+Register a GraphQL Input type for complex arguments.
+
+```typescript
+builder.inputType({
+  name: "CreateUserInput",
+  schema: CreateUserInputSchema,
+  description?: "..."
+})
+```
+
+## Field Methods
+
+### `field(typeName, fieldName, config)`
+
+Add a computed or relational field to an object type.
+
+```typescript
+builder.field("User", "posts", {
+  type: S.Array(PostSchema),
+  args?: { limit: S.optional(S.Number) },
+  description?: "...",
+  resolve: (parent, args) => Effect.gen(function* () {
+    const db = yield* Database
+    return yield* db.getPostsByUserId(parent.id, args.limit)
+  })
+})
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `typeName` | `string` | Object type to add field to |
+| `fieldName` | `string` | Field name |
+| `config.type` | `Schema<A>` | Return type schema |
+| `config.args` | `Record<string, Schema>` | Optional arguments |
+| `config.resolve` | `(parent, args) => Effect<A>` | Resolver receiving parent value |
+
+<Aside type="note">
+The parent parameter receives the resolved value of the parent type. TypeScript infers its type from the registered object type schema.
+</Aside>
+
+## Directive Methods
+
+### `directive(name, config)`
+
+Register a custom directive with optional resolver transformation.
+
+```typescript
+builder.directive("auth", {
+  locations: ["FIELD_DEFINITION"],
+  args: { role: S.optional(S.String) },
+  description: "Require authentication",
+  transformer: (next, args, info) => Effect.gen(function* () {
+    const ctx = yield* AuthContext
+    if (args.role && ctx.user.role !== args.role) {
+      return yield* Effect.fail(new AuthorizationError({
+        message: "Insufficient permissions"
+      }))
+    }
+    return yield* next
+  })
+})
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `name` | `string` | Directive name (without `@`) |
+| `config.locations` | `DirectiveLocation[]` | Where directive can be used |
+| `config.args` | `Record<string, Schema>` | Directive arguments |
+| `config.description` | `string` | Directive description |
+| `config.transformer` | `(next, args, info) => Effect` | Resolver wrapper |
+
+## Building the Schema
+
+### `buildSchema()`
+
+Build the final GraphQL schema.
+
+```typescript
+const schema: GraphQLSchema = builder.buildSchema()
+```
+
+**Returns:** Standard `GraphQLSchema` from the `graphql` package.
+
+**Throws:** If the schema is invalid (e.g., missing required types).
+
+## Pipe API
+
+The builder implements `Pipeable` for fluent composition:
+
+```typescript
+import { GraphQLSchemaBuilder, query, objectType, field } from "@effect-graphql/core"
+
+const builder = GraphQLSchemaBuilder.empty.pipe(
+  query("users", { ... }),
+  objectType({ name: "User", schema: UserSchema }),
+  field("User", "posts", { ... })
+)
+```
+
+See [Pipe Functions](/effect-graphql/reference/pipe-functions) for all available functions.
+
+## Type Parameter
+
+The builder tracks service requirements via its type parameter:
+
+```typescript
+const builder: GraphQLSchemaBuilder<Database | AuthService> =
+  GraphQLSchemaBuilder.empty.pipe(
+    query("users", {
+      type: S.Array(UserSchema),
+      resolve: () => Effect.gen(function* () {
+        const db = yield* Database        // Adds Database to R
+        const auth = yield* AuthService   // Adds AuthService to R
+        // ...
+      })
+    })
+  )
+```
+
+This ensures you provide all required services when executing queries.
+
+## Example
+
+```typescript
+import { GraphQLSchemaBuilder, query, mutation, objectType, field } from "@effect-graphql/core"
+import { Effect, Context, Layer } from "effect"
+import * as S from "effect/Schema"
+
+// Define schemas
+const UserSchema = S.Struct({
+  id: S.String,
+  name: S.String,
+  email: S.String
+})
+
+const PostSchema = S.Struct({
+  id: S.String,
+  title: S.String,
+  authorId: S.String
+})
+
+// Build schema
+const builder = GraphQLSchemaBuilder.empty.pipe(
+  // Register types
+  objectType({ name: "User", schema: UserSchema }),
+  objectType({ name: "Post", schema: PostSchema }),
+
+  // Root operations
+  query("users", {
+    type: S.Array(UserSchema),
+    resolve: () => Effect.succeed([
+      { id: "1", name: "Alice", email: "alice@example.com" }
+    ])
+  }),
+
+  query("user", {
+    type: S.NullOr(UserSchema),
+    args: { id: S.String },
+    resolve: ({ id }) => Effect.succeed(
+      id === "1" ? { id: "1", name: "Alice", email: "alice@example.com" } : null
+    )
+  }),
+
+  // Relational fields
+  field("User", "posts", {
+    type: S.Array(PostSchema),
+    resolve: (user) => Effect.succeed([
+      { id: "1", title: "Hello World", authorId: user.id }
+    ])
+  }),
+
+  field("Post", "author", {
+    type: UserSchema,
+    resolve: (post) => Effect.succeed({
+      id: post.authorId,
+      name: "Alice",
+      email: "alice@example.com"
+    })
+  })
+)
+
+// Build and use
+const schema = builder.buildSchema()
+```
