@@ -18,9 +18,9 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
-    "test": "vitest run test/unit",
+    "test": "vitest run",
+    "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
-    "test:all": "vitest run",
     "test:watch": "vitest"
   },
   "peerDependencies": {
