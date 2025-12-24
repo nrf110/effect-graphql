@@ -28,7 +28,7 @@ export const graphiqlHtml = (endpoint: string): string => `<!DOCTYPE html>
     ></script>
     <script>
       const fetcher = GraphiQL.createFetcher({
-        url: '${endpoint}',
+        url: ${JSON.stringify(endpoint)},
       });
       ReactDOM.createRoot(document.getElementById('graphiql')).render(
         React.createElement(GraphiQL, { fetcher })

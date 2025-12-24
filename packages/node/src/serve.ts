@@ -132,7 +132,9 @@ function serveWithSubscriptions<E, R, RE>(
         const body = Buffer.concat(chunks).toString()
 
         // Convert Node.js request to web standard Request
-        const url = `http://${host === "0.0.0.0" ? "localhost" : host}:${port}${req.url}`
+        // Use URL constructor for safe URL parsing (avoids injection via req.url)
+        const baseUrl = `http://${host === "0.0.0.0" ? "localhost" : host}:${port}`
+        const url = new URL(req.url || "/", baseUrl).href
         const headers = new Headers()
         for (const [key, value] of Object.entries(req.headers)) {
           if (value) {

@@ -62,13 +62,14 @@ describe("graphiql.ts", () => {
       const html = graphiqlHtml("/graphql")
 
       expect(html).toContain("GraphiQL.createFetcher")
-      expect(html).toContain("url: '/graphql'")
+      // JSON.stringify escapes the endpoint to prevent XSS
+      expect(html).toContain('url: "/graphql"')
     })
 
     it("should use custom endpoint in fetcher configuration", () => {
       const html = graphiqlHtml("/api/v1/graphql")
 
-      expect(html).toContain("url: '/api/v1/graphql'")
+      expect(html).toContain('url: "/api/v1/graphql"')
     })
 
     it("should initialize GraphiQL with ReactDOM.createRoot", () => {
@@ -94,7 +95,21 @@ describe("graphiql.ts", () => {
     it("should handle endpoints with special characters", () => {
       const html = graphiqlHtml("/api/graphql?version=2")
 
-      expect(html).toContain("url: '/api/graphql?version=2'")
+      // JSON.stringify escapes the endpoint to prevent XSS
+      expect(html).toContain('url: "/api/graphql?version=2"')
+    })
+
+    it("should escape XSS attempts in endpoint", () => {
+      // This is the security fix - XSS attempts are properly quoted
+      // Old vulnerable code: url: '${endpoint}' would break out with: url: '';alert('xss');//'
+      // New safe code: url: ${JSON.stringify(endpoint)} keeps it as: url: "';alert('xss');//"
+      const maliciousEndpoint = "';alert('xss');//"
+      const html = graphiqlHtml(maliciousEndpoint)
+
+      // Should NOT contain the vulnerable pattern (single-quoted url assignment)
+      expect(html).not.toContain("url: '")
+      // Should use JSON.stringify which produces double-quoted, escaped string
+      expect(html).toContain('url: "\'')
     })
   })
 })

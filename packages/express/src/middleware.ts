@@ -36,7 +36,9 @@ export const toMiddleware = <E, R, RE>(
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Convert Express request to web standard Request
-      const url = `${req.protocol}://${req.get("host")}${req.originalUrl}`
+      // Use URL constructor for safe URL parsing (avoids Host header injection)
+      const baseUrl = `${req.protocol}://${req.hostname}`
+      const url = new URL(req.originalUrl || "/", baseUrl).href
       const headers = new Headers()
       for (const [key, value] of Object.entries(req.headers)) {
         if (value) {
