@@ -16,19 +16,29 @@ effect-graphql/
 │   ├── core/           # @effect-graphql/core - Core library
 │   │   ├── src/
 │   │   │   ├── builder/        # Schema builder system
+│   │   │   ├── server/         # HTTP router and server utilities
 │   │   │   ├── schema-mapping.ts
 │   │   │   ├── context.ts
 │   │   │   ├── error.ts
 │   │   │   ├── loader.ts
 │   │   │   └── resolver-context.ts
 │   │   └── test/
-│   └── node/           # @effect-graphql/node - Node.js server integration
-│       ├── src/
-│       │   ├── router.ts       # makeGraphQLRouter()
-│       │   ├── config.ts
-│       │   ├── graphiql.ts
-│       │   └── schema-builder-extensions.ts  # toRouter()
-│       └── test/
+│   ├── node/           # @effect-graphql/node - Node.js server integration
+│   │   ├── src/
+│   │   │   ├── serve.ts        # serve() entry point
+│   │   │   └── ws.ts           # WebSocket subscriptions
+│   │   └── test/
+│   ├── bun/            # @effect-graphql/bun - Bun server integration
+│   │   └── src/
+│   │       ├── serve.ts        # serve() entry point
+│   │       └── ws.ts           # Bun-native WebSocket subscriptions
+│   ├── express/        # @effect-graphql/express - Express middleware
+│   │   └── src/
+│   │       ├── middleware.ts   # toMiddleware()
+│   │       └── ws.ts           # WebSocket subscriptions
+│   └── web/            # @effect-graphql/web - Web standard handler
+│       └── src/
+│           └── handler.ts      # toHandler() for Workers/Deno
 ├── examples/           # Example code
 ├── docs/               # Documentation site
 └── package.json        # Workspace root
@@ -160,15 +170,31 @@ Request-scoped context using Effect's Context:
 - `GraphQLRequestContext` - Contains headers, query, variables, operationName
 - `makeRequestContextLayer()` - Creates Layer for dependency injection
 
-### 10. Server Integration (Node Package)
+### 10. Server Integration
 
-**Package**: `@effect-graphql/node`
+The core package provides platform-agnostic HTTP utilities, while platform-specific packages provide runtime integration.
 
-HTTP server integration using @effect/platform:
+**Core Server Module** (`@effect-graphql/core/server`):
 - `makeGraphQLRouter()` - Creates an HttpRouter configured for GraphQL
 - `toRouter()` - Converts a GraphQLSchemaBuilder to an HttpRouter
 - `GraphQLRouterConfigFromEnv` - Effect Config for environment-based configuration
 - `graphiqlHtml()` - CDN-based GraphiQL UI generator
+
+**@effect-graphql/node** - Node.js server:
+- `serve()` - Start a Node.js HTTP server with optional WebSocket subscriptions
+- Uses `@effect/platform-node` and `ws` for WebSocket support
+
+**@effect-graphql/bun** - Bun server:
+- `serve()` - Start a Bun server with native WebSocket support
+- Uses `@effect/platform-bun` and Bun's built-in WebSocket API
+
+**@effect-graphql/express** - Express middleware:
+- `toMiddleware()` - Convert an HttpRouter to Express-compatible middleware
+- Integrates with existing Express applications
+
+**@effect-graphql/web** - Web standard handler:
+- `toHandler()` - Create a web standard Request/Response handler
+- For Cloudflare Workers, Deno, and other WASM-based runtimes
 
 ## Key Design Patterns
 
@@ -199,3 +225,22 @@ HTTP server integration using @effect/platform:
 - `@effect/platform-node` (peer) - Node.js HTTP server
 - `effect` (peer) - Effect ecosystem
 - `graphql` (peer) - GraphQL execution
+- `ws` (optional) - WebSocket support for subscriptions
+
+### @effect-graphql/bun
+- `@effect-graphql/core` (peer) - Core library
+- `@effect/platform` (peer) - HTTP abstractions
+- `@effect/platform-bun` (peer) - Bun HTTP server
+- `effect` (peer) - Effect ecosystem
+- `graphql` (peer) - GraphQL execution
+
+### @effect-graphql/express
+- `@effect-graphql/core` (peer) - Core library
+- `@effect/platform` (peer) - HTTP abstractions
+- `effect` (peer) - Effect ecosystem
+- `express` (peer) - Express framework
+
+### @effect-graphql/web
+- `@effect-graphql/core` (peer) - Core library
+- `@effect/platform` (peer) - HTTP abstractions
+- `effect` (peer) - Effect ecosystem
