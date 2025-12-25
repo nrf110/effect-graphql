@@ -28,10 +28,13 @@ export default defineConfig({
 						{ label: 'Schema Builder', slug: 'guides/schema-builder' },
 						{ label: 'Resolvers', slug: 'guides/resolvers' },
 						{ label: 'Resolver Context', slug: 'guides/resolver-context' },
+						{ label: 'Middleware', slug: 'guides/middleware' },
+						{ label: 'Extensions', slug: 'guides/extensions' },
 						{ label: 'Error Handling', slug: 'guides/error-handling' },
 						{ label: 'Server Integration', slug: 'guides/server-integration' },
 						{ label: 'Subscriptions', slug: 'guides/subscriptions' },
 						{ label: 'DataLoader', slug: 'guides/dataloader' },
+						{ label: 'Complexity Limiting', slug: 'guides/complexity-limiting' },
 					],
 				},
 				{

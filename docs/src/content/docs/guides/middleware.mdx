@@ -1,0 +1,367 @@
+---
+title: Middleware
+description: Global resolver wrapping for cross-cutting concerns like logging, metrics, and authorization
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Middleware provides a way to wrap resolver execution with cross-cutting concerns. Unlike directives (which are applied explicitly to individual fields), middleware can apply globally or match fields by pattern.
+
+## When to Use Middleware vs Directives
+
+| Feature | Middleware | Directives |
+|---------|-----------|------------|
+| Scope | Global or pattern-matched | Per-field, explicit |
+| Declaration | Registered on builder | Applied in field config |
+| Use case | Logging, metrics, auth patterns | Field-specific transformations |
+| Execution | Automatic based on match | Only when directive is applied |
+
+## Quick Start
+
+<Steps>
+1. **Register middleware on the builder**
+
+   ```typescript
+   import { GraphQLSchemaBuilder, middleware } from "@effect-gql/core"
+
+   const builder = GraphQLSchemaBuilder.empty.pipe(
+     middleware({
+       name: "logging",
+       apply: (effect, ctx) =>
+         Effect.gen(function* () {
+           const field = `${ctx.info.parentType.name}.${ctx.info.fieldName}`
+           yield* Effect.logInfo(`Resolving ${field}`)
+           return yield* effect
+         }),
+     }),
+   )
+   ```
+
+2. **Add your queries and mutations**
+
+   ```typescript
+   const schema = builder.pipe(
+     query("hello", {
+       type: S.String,
+       resolve: () => Effect.succeed("world"),
+     }),
+   ).buildSchema()
+   ```
+
+3. **All resolvers are automatically wrapped**
+
+   When `{ hello }` is executed, the logging middleware runs automatically.
+</Steps>
+
+## Middleware Configuration
+
+### Basic Middleware
+
+The simplest middleware applies to all resolvers:
+
+```typescript
+middleware({
+  name: "timing",
+  description: "Logs resolver execution time",
+  apply: (effect, ctx) =>
+    Effect.gen(function* () {
+      const start = Date.now()
+      const result = yield* effect
+      const duration = Date.now() - start
+      yield* Effect.logInfo(`${ctx.info.fieldName} took ${duration}ms`)
+      return result
+    }),
+})
+```
+
+### Pattern-Matched Middleware
+
+Use the `match` predicate to selectively apply middleware:
+
+```typescript
+middleware({
+  name: "adminOnly",
+  description: "Requires admin role for admin* fields",
+  match: (info) => info.fieldName.startsWith("admin"),
+  apply: (effect) =>
+    Effect.gen(function* () {
+      const auth = yield* AuthService
+      yield* auth.requireAdmin()
+      return yield* effect
+    }),
+})
+```
+
+The `match` function receives the GraphQL `info` object and returns `true` if middleware should apply.
+
+### Middleware with Services
+
+Middleware can depend on Effect services:
+
+```typescript
+class MetricsService extends Context.Tag("MetricsService")<
+  MetricsService,
+  {
+    readonly recordTiming: (field: string, ms: number) => Effect.Effect<void>
+  }
+>() {}
+
+middleware<MetricsService>({
+  name: "metrics",
+  apply: (effect, ctx) =>
+    Effect.gen(function* () {
+      const metrics = yield* MetricsService
+      const field = `${ctx.info.parentType.name}.${ctx.info.fieldName}`
+      const start = Date.now()
+
+      const result = yield* effect
+
+      yield* metrics.recordTiming(field, Date.now() - start)
+      return result
+    }),
+})
+```
+
+<Aside type="tip">
+  The type parameter `<MetricsService>` tells the type system this middleware requires the MetricsService. This requirement is automatically accumulated in the schema builder's type.
+</Aside>
+
+## Middleware Context
+
+The `apply` function receives two arguments:
+
+```typescript
+apply: (effect, ctx) => Effect.Effect<A, E, R>
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `effect` | `Effect<A, E, R>` | The wrapped resolver effect to execute |
+| `ctx.parent` | `unknown` | The parent object (root for queries/mutations) |
+| `ctx.args` | `Record<string, unknown>` | The field arguments |
+| `ctx.info` | `GraphQLResolveInfo` | Full GraphQL resolve info |
+
+### Using Context Values
+
+```typescript
+middleware({
+  name: "fieldLogger",
+  apply: (effect, ctx) =>
+    Effect.gen(function* () {
+      yield* Effect.logInfo(`Field: ${ctx.info.fieldName}`)
+      yield* Effect.logInfo(`Parent type: ${ctx.info.parentType.name}`)
+      yield* Effect.logInfo(`Args: ${JSON.stringify(ctx.args)}`)
+      return yield* effect
+    }),
+})
+```
+
+## Execution Order
+
+Middleware executes in "onion" order - first registered is outermost:
+
+```typescript
+const builder = GraphQLSchemaBuilder.empty.pipe(
+  middleware({ name: "outer", apply: (e) => /* runs first/last */ }),
+  middleware({ name: "middle", apply: (e) => /* runs second */ }),
+  middleware({ name: "inner", apply: (e) => /* runs closest to resolver */ }),
+)
+```
+
+Execution flow:
+```
+outer.before → middle.before → inner.before → resolver → inner.after → middle.after → outer.after
+```
+
+This is the same pattern as Koa middleware or Express middleware chains.
+
+## Common Patterns
+
+### Logging Middleware
+
+```typescript
+middleware({
+  name: "logging",
+  apply: (effect, ctx) =>
+    Effect.gen(function* () {
+      const field = `${ctx.info.parentType.name}.${ctx.info.fieldName}`
+      yield* Effect.logInfo(`[START] ${field}`)
+      const start = Date.now()
+
+      const result = yield* effect
+
+      yield* Effect.logInfo(`[END] ${field} (${Date.now() - start}ms)`)
+      return result
+    }),
+})
+```
+
+### Error Normalization
+
+```typescript
+middleware({
+  name: "errorNormalization",
+  apply: (effect, ctx) =>
+    Effect.catchAll(effect, (error) =>
+      Effect.fail(
+        new Error(
+          `Error in ${ctx.info.parentType.name}.${ctx.info.fieldName}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        )
+      )
+    ),
+})
+```
+
+### Role-Based Access Control
+
+```typescript
+// Apply to all mutation fields
+middleware<AuthService>({
+  name: "mutationAuth",
+  match: (info) => info.parentType.name === "Mutation",
+  apply: (effect) =>
+    Effect.gen(function* () {
+      const auth = yield* AuthService
+      yield* auth.requireAuthenticated()
+      return yield* effect
+    }),
+})
+
+// Apply to admin-prefixed fields
+middleware<AuthService>({
+  name: "adminAuth",
+  match: (info) => info.fieldName.startsWith("admin"),
+  apply: (effect) =>
+    Effect.gen(function* () {
+      const auth = yield* AuthService
+      yield* auth.requireRole("ADMIN")
+      return yield* effect
+    }),
+})
+```
+
+### Caching Middleware
+
+```typescript
+middleware<CacheService>({
+  name: "caching",
+  match: (info) => info.fieldName.startsWith("cached"),
+  apply: (effect, ctx) =>
+    Effect.gen(function* () {
+      const cache = yield* CacheService
+      const key = `${ctx.info.fieldName}:${JSON.stringify(ctx.args)}`
+
+      const cached = yield* cache.get(key)
+      if (cached !== undefined) {
+        return cached
+      }
+
+      const result = yield* effect
+      yield* cache.set(key, result)
+      return result
+    }),
+})
+```
+
+## Composing with Directives
+
+Middleware and directives can work together. Middleware wraps the entire resolver chain (including directive transformations):
+
+```typescript
+const builder = GraphQLSchemaBuilder.empty.pipe(
+  // Middleware wraps everything
+  middleware({ name: "timing", apply: ... }),
+
+  // Directive for specific fields
+  directive("uppercase", {
+    locations: [DirectiveLocation.FIELD_DEFINITION],
+    apply: (effect) => effect.pipe(Effect.map(s => s.toUpperCase())),
+  }),
+
+  query("greeting", {
+    type: S.String,
+    directives: [{ name: "uppercase" }],
+    resolve: () => Effect.succeed("hello"),
+  }),
+)
+```
+
+Execution order: `middleware.before → directive.before → resolver → directive.after → middleware.after`
+
+## Full Example
+
+```typescript
+import { Effect, Layer, Context } from "effect"
+import * as S from "effect/Schema"
+import { GraphQLSchemaBuilder, middleware, query, execute } from "@effect-gql/core"
+
+// Services
+class AuthService extends Context.Tag("AuthService")<
+  AuthService,
+  { readonly requireAdmin: () => Effect.Effect<void, Error> }
+>() {}
+
+class MetricsService extends Context.Tag("MetricsService")<
+  MetricsService,
+  { readonly recordTiming: (field: string, ms: number) => Effect.Effect<void> }
+>() {}
+
+// Build schema with middleware
+const builder = GraphQLSchemaBuilder.empty.pipe(
+  // Global logging
+  middleware({
+    name: "logging",
+    apply: (effect, ctx) =>
+      Effect.gen(function* () {
+        yield* Effect.logInfo(`Resolving ${ctx.info.fieldName}`)
+        return yield* effect
+      }),
+  }),
+
+  // Metrics for all fields
+  middleware<MetricsService>({
+    name: "metrics",
+    apply: (effect, ctx) =>
+      Effect.gen(function* () {
+        const metrics = yield* MetricsService
+        const start = Date.now()
+        const result = yield* effect
+        yield* metrics.recordTiming(ctx.info.fieldName, Date.now() - start)
+        return result
+      }),
+  }),
+
+  // Admin-only for admin* fields
+  middleware<AuthService>({
+    name: "adminOnly",
+    match: (info) => info.fieldName.startsWith("admin"),
+    apply: (effect) =>
+      Effect.gen(function* () {
+        const auth = yield* AuthService
+        yield* auth.requireAdmin()
+        return yield* effect
+      }),
+  }),
+
+  // Queries
+  query("users", {
+    type: S.Array(S.Struct({ id: S.String, name: S.String })),
+    resolve: () => Effect.succeed([{ id: "1", name: "Alice" }]),
+  }),
+
+  query("adminStats", {
+    type: S.Struct({ count: S.Number }),
+    resolve: () => Effect.succeed({ count: 42 }),
+  }),
+)
+
+const schema = builder.buildSchema()
+```
+
+## Next Steps
+
+- [Extensions](/effect-graphql/guides/extensions) - Request lifecycle hooks for tracing and metadata
+- [Error Handling](/effect-graphql/guides/error-handling) - Handle errors in middleware
+- [Directives](/effect-graphql/guides/schema-builder#custom-directives) - Per-field transformations

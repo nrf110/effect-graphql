@@ -282,6 +282,109 @@ GraphQL supports partial responses where some fields succeed while others fail:
   when you want partial responses instead of full failures.
 </Aside>
 
+## Global Error Handler
+
+When using the HTTP router, you can configure a global error handler for uncaught errors. This handles errors that occur outside of normal GraphQL execution (e.g., malformed requests, server errors).
+
+### Default Behavior
+
+By default, uncaught errors return a 500 Internal Server Error:
+
+```json
+{
+  "errors": [
+    {
+      "message": "An error occurred processing your request"
+    }
+  ]
+}
+```
+
+In non-production environments, the full error is logged for debugging.
+
+### Custom Error Handler
+
+Provide a custom error handler to control the response:
+
+```typescript
+import { makeGraphQLRouter, type ErrorHandler } from "@effect-gql/core/server"
+import { HttpServerResponse } from "@effect/platform"
+import { Cause, Effect } from "effect"
+
+const customErrorHandler: ErrorHandler = (cause) =>
+  Effect.gen(function* () {
+    // Log the error
+    yield* Effect.logError("GraphQL request failed", cause)
+
+    // Check for specific error types
+    const failure = Cause.failureOption(cause)
+
+    if (failure._tag === "Some" && failure.value instanceof RateLimitError) {
+      return yield* HttpServerResponse.json(
+        {
+          errors: [{ message: "Rate limit exceeded", extensions: { code: "RATE_LIMITED" } }],
+        },
+        { status: 429 }
+      )
+    }
+
+    // Default error response
+    return yield* HttpServerResponse.json(
+      {
+        errors: [{ message: "Internal server error" }],
+      },
+      { status: 500 }
+    )
+  }).pipe(Effect.orDie)
+
+const router = makeGraphQLRouter(schema, serviceLayer, {
+  errorHandler: customErrorHandler,
+})
+```
+
+### Error Handler Type
+
+The error handler receives an Effect `Cause` and must return an `HttpServerResponse`:
+
+```typescript
+type ErrorHandler = (
+  cause: Cause.Cause<unknown>
+) => Effect.Effect<HttpServerResponse.HttpServerResponse, never, never>
+```
+
+### When the Error Handler is Called
+
+The global error handler catches errors that escape normal GraphQL error handling:
+
+- Malformed JSON in request body
+- Missing required fields in request
+- Errors during request parsing
+- Uncaught exceptions in resolver execution
+
+<Aside type="note">
+  Resolver errors that are returned via `Effect.fail()` are handled by GraphQL's normal error system and appear in the response's `errors` array with a 200 status code. The global error handler only catches truly unexpected errors.
+</Aside>
+
+### Using the Default Handler
+
+You can import and customize the default handler:
+
+```typescript
+import { defaultErrorHandler } from "@effect-gql/core/server"
+
+// Use as-is
+const router = makeGraphQLRouter(schema, serviceLayer, {
+  errorHandler: defaultErrorHandler,
+})
+
+// Or wrap it
+const loggingErrorHandler: ErrorHandler = (cause) =>
+  Effect.gen(function* () {
+    yield* Effect.logError("Unhandled error in GraphQL", cause)
+    return yield* defaultErrorHandler(cause)
+  })
+```
+
 ## Best Practices
 
 ### 1. Be Specific
