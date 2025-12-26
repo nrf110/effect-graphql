@@ -12,6 +12,10 @@
     "./builder": {
       "types": "./dist/builder/index.d.ts",
       "default": "./dist/builder/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "default": "./dist/server/index.js"
     }
   },
   "files": [
