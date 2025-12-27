@@ -1,26 +1,51 @@
 ---
-title: WebSocket Subscriptions
-description: Real-time GraphQL subscriptions using graphql-ws protocol
+title: Subscriptions
+description: Real-time GraphQL subscriptions using WebSocket or Server-Sent Events
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
-Effect GraphQL supports real-time subscriptions using the [graphql-ws](https://github.com/enisdenjo/graphql-ws) protocol. Subscriptions allow clients to receive live updates when data changes.
+Effect GQL supports real-time subscriptions over two transport protocols: **WebSocket** (graphql-ws) and **Server-Sent Events** (graphql-sse). Both transports use Effect's `Stream` type for subscriptions, providing a natural way to emit values over time.
 
 ## Overview
 
-GraphQL subscriptions work over WebSocket connections:
+GraphQL subscriptions enable clients to receive live updates when data changes:
 
-1. Client opens a WebSocket connection to the server
+1. Client opens a persistent connection to the server
 2. Client sends a subscription query
 3. Server pushes updates to the client as they occur
 4. Connection stays open until client disconnects or subscription completes
 
-Effect GraphQL uses Effect's `Stream` type for subscriptions, providing a natural way to emit values over time.
+## Choosing a Transport
+
+| Feature | WebSocket | SSE |
+|---------|-----------|-----|
+| Direction | Bidirectional | Server → Client only |
+| Protocol | Dedicated protocol | HTTP/1.1+ |
+| Proxy support | May require configuration | Works out of the box |
+| Browser support | Native `WebSocket` | Native `EventSource` |
+| Connection limits | Unlimited | 6 per domain (HTTP/1.1) |
+| Reconnection | Manual | Built-in |
+| Dependencies | `ws` package (Node.js) | None |
+
+**Use WebSocket when:**
+- You need bidirectional communication
+- You have many concurrent subscriptions
+- You need maximum performance
+
+**Use SSE when:**
+- You only need server-to-client updates
+- You're behind strict proxies/firewalls
+- You want simpler infrastructure
+- You prefer HTTP-based solutions
+
+<Aside type="tip">
+You can offer both transports and let clients choose based on their environment.
+</Aside>
 
 ## Defining Subscriptions
 
-Use the `subscription` function to register subscription fields:
+Subscription resolvers are the same regardless of transport. Use the `subscription` function to register subscription fields:
 
 ```typescript
 import { GraphQLSchemaBuilder, subscription } from "@effect-gql/core"
@@ -36,7 +61,7 @@ const MessageSchema = S.Struct({
 const builder = GraphQLSchemaBuilder.empty.pipe(
   subscription("messageAdded", {
     type: MessageSchema,
-    resolve: () => Effect.gen(function* () {
+    subscribe: () => Effect.gen(function* () {
       const pubsub = yield* PubSubService
       // Return a Stream that emits new messages
       return pubsub.subscribe("messages")
@@ -50,10 +75,8 @@ const builder = GraphQLSchemaBuilder.empty.pipe(
 ```typescript
 subscription("messagesInChannel", {
   type: MessageSchema,
-  args: {
-    channelId: S.String
-  },
-  resolve: ({ channelId }) => Effect.gen(function* () {
+  args: S.Struct({ channelId: S.String }),
+  subscribe: ({ channelId }) => Effect.gen(function* () {
     const pubsub = yield* PubSubService
     return pubsub.subscribe("messages").pipe(
       Stream.filter((msg) => msg.channelId === channelId)
@@ -62,7 +85,13 @@ subscription("messagesInChannel", {
 })
 ```
 
-## Server Setup
+---
+
+## WebSocket Transport
+
+WebSocket subscriptions use the [graphql-ws](https://github.com/enisdenjo/graphql-ws) protocol.
+
+### Server Setup
 
 <Tabs>
   <TabItem label="Node.js">
@@ -76,14 +105,56 @@ const router = toRouter(builder, serviceLayer, { graphiql: true })
 serve(router, serviceLayer, {
   port: 4000,
   subscriptions: {
-    schema,      // Required: the GraphQL schema
+    schema,           // Required: the GraphQL schema
     path: "/graphql"  // WebSocket path (default: "/graphql")
   },
   onStart: (url) => console.log(`Server at ${url}`)
 })
 ```
+
+<Aside type="note">
+For Node.js WebSocket support, install the `ws` package:
+```bash
+npm install ws
+```
+</Aside>
   </TabItem>
-  <TabItem label="Custom Setup">
+  <TabItem label="Bun">
+```typescript
+import { createBunWSHandlers } from "@effect-gql/bun"
+
+const { upgrade, websocket } = createBunWSHandlers(schema, serviceLayer, {
+  path: "/graphql"
+})
+
+Bun.serve({
+  port: 4000,
+  fetch(req, server) {
+    if (upgrade(req, server)) {
+      return // Upgraded to WebSocket
+    }
+    // Handle HTTP requests...
+  },
+  websocket,
+})
+```
+  </TabItem>
+  <TabItem label="Express">
+```typescript
+import express from "express"
+import { createServer } from "node:http"
+import { toMiddleware, attachWebSocket } from "@effect-gql/express"
+
+const app = express()
+app.use(toMiddleware(router, Layer.empty))
+
+const server = createServer(app)
+attachWebSocket(server, schema, Layer.empty, { path: "/graphql" })
+
+server.listen(4000)
+```
+  </TabItem>
+  <TabItem label="Custom">
 ```typescript
 import { createGraphQLWSServer } from "@effect-gql/node"
 import { createServer } from "node:http"
@@ -94,40 +165,23 @@ const { handleUpgrade, close } = createGraphQLWSServer(schema, serviceLayer, {
   path: "/graphql"
 })
 
-// Handle WebSocket upgrade requests
 httpServer.on("upgrade", (request, socket, head) => {
   handleUpgrade(request, socket, head)
 })
 
 httpServer.listen(4000)
-
-// Cleanup on shutdown
-process.on("SIGTERM", async () => {
-  await close()
-  httpServer.close()
-})
 ```
   </TabItem>
 </Tabs>
 
-<Aside type="note">
-  For Node.js with subscriptions, you need the `ws` package installed:
-  ```bash
-  npm install ws
-  ```
-</Aside>
-
-## Connection Lifecycle Hooks
-
-Handle connection events for authentication, logging, and cleanup:
+### WebSocket Lifecycle Hooks
 
 ```typescript
 serve(router, serviceLayer, {
-  port: 4000,
   subscriptions: {
     schema,
 
-    // Called when client connects
+    // Called when client connects (for authentication)
     onConnect: (connectionParams) => Effect.gen(function* () {
       const token = connectionParams.authToken as string
       if (!token) return false  // Reject connection
@@ -137,76 +191,23 @@ serve(router, serviceLayer, {
     }),
 
     // Called when client disconnects
-    onDisconnect: (ctx) => Effect.gen(function* () {
-      console.log("Client disconnected")
-      yield* ActiveConnections.remove(ctx.socket)
-    }),
+    onDisconnect: (ctx) => Effect.log("Client disconnected"),
 
     // Called for each subscription
-    onSubscribe: (ctx, message) => Effect.gen(function* () {
-      console.log(`Subscription started: ${message.payload.operationName}`)
-      yield* AuditLog.record({
-        userId: ctx.connectionParams.user?.id,
-        action: "subscription",
-        query: message.payload.query
-      })
-    }),
+    onSubscribe: (ctx, message) =>
+      Effect.log(`Subscription started: ${message.payload.operationName}`),
 
-    // Called when subscription completes or is stopped
-    onComplete: (ctx, message) => Effect.gen(function* () {
-      console.log(`Subscription completed: ${message.id}`)
-    }),
+    // Called when subscription completes
+    onComplete: (ctx, message) =>
+      Effect.log(`Subscription completed: ${message.id}`),
 
-    // Called when an error occurs
-    onError: (ctx, errors) => Effect.gen(function* () {
-      yield* ErrorReporter.report(errors)
-    })
+    // Called on errors
+    onError: (ctx, errors) => Effect.logError("Subscription error", errors)
   }
 })
 ```
 
-### Connection Context
-
-Lifecycle hooks receive a `ConnectionContext` object:
-
-```typescript
-interface ConnectionContext<R> {
-  // The Effect runtime for this connection
-  runtime: Runtime.Runtime<R>
-
-  // Parameters sent by client during connection
-  connectionParams: Record<string, unknown>
-
-  // The underlying WebSocket
-  socket: EffectWebSocket
-}
-```
-
-### Authentication
-
-The `onConnect` hook is the primary place for authentication:
-
-```typescript
-onConnect: (params) => Effect.gen(function* () {
-  const token = params.authToken as string
-
-  if (!token) {
-    // Return false to reject the connection
-    return false
-  }
-
-  try {
-    const user = yield* AuthService.validateToken(token)
-    // Returned object is merged into connectionParams
-    // and available in subsequent hooks and resolvers
-    return { user }
-  } catch {
-    return false
-  }
-})
-```
-
-Client-side connection with auth:
+### WebSocket Client
 
 ```javascript
 import { createClient } from "graphql-ws"
@@ -214,25 +215,239 @@ import { createClient } from "graphql-ws"
 const client = createClient({
   url: "ws://localhost:4000/graphql",
   connectionParams: {
-    authToken: "your-jwt-token"
+    authToken: localStorage.getItem("token")
   }
 })
+
+const unsubscribe = client.subscribe(
+  {
+    query: `subscription { messageAdded { id content } }`,
+  },
+  {
+    next: (data) => console.log("New message:", data),
+    error: (err) => console.error("Error:", err),
+    complete: () => console.log("Complete")
+  }
+)
 ```
+
+---
+
+## SSE Transport
+
+SSE subscriptions use the [graphql-sse](https://github.com/enisdenjo/graphql-sse) protocol (distinct connections mode).
+
+### Server Setup
+
+<Tabs>
+  <TabItem label="Node.js">
+```typescript
+import { createServer } from "node:http"
+import { createSSEHandler } from "@effect-gql/node"
+
+const sseHandler = createSSEHandler(schema, serviceLayer, {
+  onConnect: (request, headers) => Effect.gen(function* () {
+    const token = headers.get("authorization")?.replace("Bearer ", "")
+    const user = yield* AuthService.validateToken(token)
+    return { user }
+  }),
+})
+
+const server = createServer(async (req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host}`)
+
+  if (url.pathname === "/graphql/stream" && req.method === "POST") {
+    await sseHandler(req, res)
+    return
+  }
+
+  // Handle other requests...
+})
+
+server.listen(4000)
+```
+  </TabItem>
+  <TabItem label="Bun">
+```typescript
+import { createBunSSEHandlers } from "@effect-gql/bun"
+
+const sse = createBunSSEHandlers(schema, serviceLayer, {
+  path: "/graphql/stream"
+})
+
+Bun.serve({
+  port: 4000,
+  fetch(req, server) {
+    if (sse.shouldHandle(req)) {
+      return sse.handle(req)
+    }
+    // Handle other requests...
+  },
+})
+```
+  </TabItem>
+  <TabItem label="Express">
+```typescript
+import express from "express"
+import { sseMiddleware } from "@effect-gql/express"
+
+const app = express()
+app.use(express.json())
+
+app.use(sseMiddleware(schema, Layer.empty, {
+  path: "/graphql/stream"
+}))
+
+app.listen(4000)
+```
+  </TabItem>
+  <TabItem label="Workers/Deno">
+```typescript
+import { createSSEHandler } from "@effect-gql/web"
+
+const sseHandler = createSSEHandler(schema, Layer.empty)
+
+export default {
+  async fetch(request: Request) {
+    const url = new URL(request.url)
+
+    if (url.pathname === "/graphql/stream" && request.method === "POST") {
+      return await sseHandler(request)
+    }
+    // Handle other requests...
+  }
+}
+```
+  </TabItem>
+</Tabs>
+
+### SSE Lifecycle Hooks
+
+```typescript
+const sseHandler = createSSEHandler(schema, Layer.empty, {
+  // Called before subscription starts (for auth)
+  onConnect: (request, headers) => Effect.gen(function* () {
+    const token = headers.get("authorization")
+    const user = yield* AuthService.validateToken(token)
+    return { user }
+  }),
+
+  // Called when subscription starts streaming
+  onSubscribe: (ctx) => Effect.log("Subscription started"),
+
+  // Called when subscription completes
+  onComplete: (ctx) => Effect.log("Subscription completed"),
+
+  // Called when client disconnects
+  onDisconnect: (ctx) => Effect.log("Client disconnected"),
+
+  // Called on errors
+  onError: (ctx, error) => Effect.logError("Error", error)
+})
+```
+
+### SSE Event Format
+
+```
+event: next
+data: {"data":{"messageAdded":{"id":"1","content":"Hello"}}}
+
+event: next
+data: {"data":{"messageAdded":{"id":"2","content":"World"}}}
+
+event: complete
+data:
+```
+
+### SSE Client
+
+Using the Fetch API:
+
+```javascript
+const response = await fetch("/graphql/stream", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer your-token"
+  },
+  body: JSON.stringify({
+    query: "subscription { messageAdded { id content } }",
+  }),
+})
+
+const reader = response.body.getReader()
+const decoder = new TextDecoder()
+
+while (true) {
+  const { done, value } = await reader.read()
+  if (done) break
+  // Parse SSE events from decoder.decode(value)...
+}
+```
+
+Using graphql-sse client:
+
+```javascript
+import { createClient } from "graphql-sse"
+
+const client = createClient({
+  url: "/graphql/stream",
+})
+
+for await (const result of client.iterate({
+  query: "subscription { messageAdded { id content } }",
+})) {
+  console.log("New message:", result.data?.messageAdded)
+}
+```
+
+---
+
+## Both Transports
+
+You can offer both WebSocket and SSE subscriptions simultaneously:
+
+```typescript
+import { createServer } from "node:http"
+import { createGraphQLWSServer, createSSEHandler } from "@effect-gql/node"
+
+const httpServer = createServer(async (req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host}`)
+
+  // SSE subscriptions
+  if (url.pathname === "/graphql/stream" && req.method === "POST") {
+    await sseHandler(req, res)
+    return
+  }
+
+  // Regular GraphQL...
+})
+
+// WebSocket subscriptions
+const { handleUpgrade } = createGraphQLWSServer(schema, Layer.empty)
+httpServer.on("upgrade", handleUpgrade)
+
+httpServer.listen(4000, () => {
+  console.log("WebSocket: ws://localhost:4000/graphql")
+  console.log("SSE: http://localhost:4000/graphql/stream")
+})
+```
+
+---
 
 ## Building a PubSub Service
 
 A typical subscription setup requires a pub/sub system. Here's a simple in-memory implementation:
 
 ```typescript
-import { Context, Effect, Layer, Stream, PubSub, Queue } from "effect"
+import { Context, Effect, Layer, Stream, PubSub } from "effect"
 
-// Define the PubSub service
 class PubSubService extends Context.Tag("PubSubService")<PubSubService, {
   publish: <A>(topic: string, message: A) => Effect.Effect<void>
   subscribe: <A>(topic: string) => Stream.Stream<A>
 }>() {}
 
-// Create in-memory implementation
 const makePubSubService = Effect.gen(function* () {
   const topics = new Map<string, PubSub.PubSub<any>>()
 
@@ -265,17 +480,14 @@ const makePubSubService = Effect.gen(function* () {
 const PubSubServiceLive = Layer.effect(PubSubService, makePubSubService)
 ```
 
-### Using the PubSub in Resolvers
+### Using PubSub in Resolvers
 
 ```typescript
 const builder = GraphQLSchemaBuilder.empty.pipe(
-  // Mutation that triggers subscription updates
+  // Mutation triggers subscription updates
   mutation("sendMessage", {
     type: MessageSchema,
-    args: {
-      channelId: S.String,
-      content: S.String
-    },
+    args: S.Struct({ channelId: S.String, content: S.String }),
     resolve: ({ channelId, content }) => Effect.gen(function* () {
       const pubsub = yield* PubSubService
       const message = {
@@ -285,21 +497,18 @@ const builder = GraphQLSchemaBuilder.empty.pipe(
         createdAt: new Date().toISOString()
       }
 
-      // Save to database
       yield* MessageRepository.save(message)
-
-      // Notify subscribers
       yield* pubsub.publish(`channel:${channelId}`, message)
 
       return message
     })
   }),
 
-  // Subscription that listens for new messages
+  // Subscription listens for new messages
   subscription("messageAdded", {
     type: MessageSchema,
-    args: { channelId: S.String },
-    resolve: ({ channelId }) => Effect.gen(function* () {
+    args: S.Struct({ channelId: S.String }),
+    subscribe: ({ channelId }) => Effect.gen(function* () {
       const pubsub = yield* PubSubService
       return pubsub.subscribe(`channel:${channelId}`)
     })
@@ -307,90 +516,7 @@ const builder = GraphQLSchemaBuilder.empty.pipe(
 )
 ```
 
-## Client-Side Integration
-
-### Using graphql-ws
-
-```javascript
-import { createClient } from "graphql-ws"
-
-const client = createClient({
-  url: "ws://localhost:4000/graphql",
-  connectionParams: {
-    authToken: localStorage.getItem("token")
-  }
-})
-
-// Subscribe to messages
-const unsubscribe = client.subscribe(
-  {
-    query: `
-      subscription ($channelId: String!) {
-        messageAdded(channelId: $channelId) {
-          id
-          content
-          createdAt
-        }
-      }
-    `,
-    variables: { channelId: "general" }
-  },
-  {
-    next: (data) => console.log("New message:", data),
-    error: (err) => console.error("Subscription error:", err),
-    complete: () => console.log("Subscription complete")
-  }
-)
-
-// Later, to unsubscribe
-unsubscribe()
-```
-
-### Using Apollo Client
-
-```javascript
-import { ApolloClient, InMemoryCache } from "@apollo/client"
-import { GraphQLWsLink } from "@apollo/client/link/subscriptions"
-import { createClient } from "graphql-ws"
-
-const wsLink = new GraphQLWsLink(
-  createClient({
-    url: "ws://localhost:4000/graphql",
-    connectionParams: {
-      authToken: localStorage.getItem("token")
-    }
-  })
-)
-
-const client = new ApolloClient({
-  link: wsLink,
-  cache: new InMemoryCache()
-})
-```
-
-### Using urql
-
-```javascript
-import { createClient, subscriptionExchange } from "urql"
-import { createClient as createWSClient } from "graphql-ws"
-
-const wsClient = createWSClient({
-  url: "ws://localhost:4000/graphql"
-})
-
-const client = createClient({
-  url: "/graphql",
-  exchanges: [
-    subscriptionExchange({
-      forwardSubscription: (operation) => ({
-        subscribe: (sink) => ({
-          unsubscribe: wsClient.subscribe(operation, sink)
-        })
-      })
-    })
-  ]
-})
-```
+---
 
 ## Advanced Patterns
 
@@ -401,19 +527,17 @@ Filter events server-side to reduce bandwidth:
 ```typescript
 subscription("userActivity", {
   type: ActivitySchema,
-  args: {
+  args: S.Struct({
     userId: S.optional(S.String),
     types: S.optional(S.Array(S.String))
-  },
-  resolve: ({ userId, types }) => Effect.gen(function* () {
+  }),
+  subscribe: ({ userId, types }) => Effect.gen(function* () {
     const pubsub = yield* PubSubService
 
     return pubsub.subscribe<Activity>("activity").pipe(
-      // Filter by user if specified
       Stream.filter((activity) =>
         userId ? activity.userId === userId : true
       ),
-      // Filter by activity type if specified
       Stream.filter((activity) =>
         types?.length ? types.includes(activity.type) : true
       )
@@ -429,13 +553,12 @@ Batch rapid updates to reduce client processing:
 ```typescript
 subscription("stockPrices", {
   type: S.Array(StockPriceSchema),
-  args: { symbols: S.Array(S.String) },
-  resolve: ({ symbols }) => Effect.gen(function* () {
+  args: S.Struct({ symbols: S.Array(S.String) }),
+  subscribe: ({ symbols }) => Effect.gen(function* () {
     const pubsub = yield* PubSubService
 
     return pubsub.subscribe<StockPrice>("prices").pipe(
       Stream.filter((price) => symbols.includes(price.symbol)),
-      // Collect updates for 100ms, then emit as batch
       Stream.groupedWithin(100, { duration: "100 millis" }),
       Stream.map((prices) => [...prices])
     )
@@ -450,15 +573,12 @@ Send initial data before streaming updates:
 ```typescript
 subscription("messages", {
   type: MessageSchema,
-  args: { channelId: S.String },
-  resolve: ({ channelId }) => Effect.gen(function* () {
+  args: S.Struct({ channelId: S.String }),
+  subscribe: ({ channelId }) => Effect.gen(function* () {
     const db = yield* Database
     const pubsub = yield* PubSubService
 
-    // Get recent messages
     const recentMessages = yield* db.getRecentMessages(channelId, 10)
-
-    // Create stream from initial data + live updates
     const initial = Stream.fromIterable(recentMessages)
     const live = pubsub.subscribe(`channel:${channelId}`)
 
@@ -467,18 +587,60 @@ subscription("messages", {
 })
 ```
 
+### Complexity Limiting
+
+Protect expensive subscriptions with complexity limits:
+
+```typescript
+// WebSocket
+serve(router, serviceLayer, {
+  subscriptions: {
+    schema,
+    complexity: { maxComplexity: 100, maxDepth: 5 },
+    fieldComplexities: builder.getFieldComplexities(),
+  }
+})
+
+// SSE
+const sseHandler = createSSEHandler(schema, Layer.empty, {
+  complexity: { maxComplexity: 100, maxDepth: 5 },
+  fieldComplexities: builder.getFieldComplexities(),
+})
+```
+
+---
+
+## Client Libraries
+
+### WebSocket Clients
+
+| Library | Import |
+|---------|--------|
+| graphql-ws | `import { createClient } from "graphql-ws"` |
+| Apollo Client | `import { GraphQLWsLink } from "@apollo/client/link/subscriptions"` |
+| urql | `import { subscriptionExchange } from "urql"` |
+
+### SSE Clients
+
+| Library | Import |
+|---------|--------|
+| graphql-sse | `import { createClient } from "graphql-sse"` |
+| Native | `EventSource` or `fetch` API |
+
+---
+
 ## Platform Support
 
-| Platform | Package | WebSocket Support |
-|----------|---------|-------------------|
-| Node.js | `@effect-gql/node` | Via `ws` package |
-| Bun | `@effect-gql/bun` | Built-in |
-| Express | `@effect-gql/express` | Via `ws` package |
-
-All platforms use the same `graphql-ws` protocol, ensuring client compatibility.
+| Platform | WebSocket | SSE |
+|----------|-----------|-----|
+| Node.js | `@effect-gql/node` (requires `ws`) | `@effect-gql/node` |
+| Bun | `@effect-gql/bun` (built-in) | `@effect-gql/bun` |
+| Express | `@effect-gql/express` (requires `ws`) | `@effect-gql/express` |
+| Workers/Deno | Not supported | `@effect-gql/web` |
 
 ## Next Steps
 
-- [Server Integration](/effect-gql/guides/server-integration) - HTTP server setup
+- [Server Integration](/effect-gql/guides/server-integration) - Complete server setup
 - [DataLoader](/effect-gql/guides/dataloader) - Optimize database queries in subscriptions
+- [Complexity Limiting](/effect-gql/guides/complexity-limiting) - Protect expensive subscriptions
 - [Error Handling](/effect-gql/guides/error-handling) - Handle subscription errors
