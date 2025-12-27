@@ -1,0 +1,42 @@
+version: 2
+updates:
+  # Keep npm dependencies up to date
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      # Group Effect ecosystem updates together
+      effect:
+        patterns:
+          - "effect"
+          - "@effect/*"
+      # Group TypeScript and build tools
+      typescript:
+        patterns:
+          - "typescript"
+          - "tslib"
+      # Group testing dependencies
+      testing:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+      # Group GraphQL dependencies
+      graphql:
+        patterns:
+          - "graphql"
+          - "graphql-*"
+      # Group type definitions
+      types:
+        patterns:
+          - "@types/*"
+
+  # Keep GitHub Actions up to date
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
