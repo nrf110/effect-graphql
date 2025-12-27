@@ -264,8 +264,9 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     name?: string
     schema: S.Schema<any, any, any>
     resolveType?: (value: any) => string
+    directives?: readonly DirectiveApplication[]
   }): GraphQLSchemaBuilder<R> {
-    const { schema, resolveType } = config
+    const { schema, resolveType, directives } = config
     const name = config.name ?? getSchemaName(schema)
     if (!name) {
       throw new Error("interfaceType requires a name. Either provide one explicitly or use a TaggedStruct/TaggedClass/Schema.Class")
@@ -276,6 +277,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
       name,
       schema,
       resolveType: resolveType ?? ((value: any) => value._tag),
+      directives,
     })
 
     return this.with(updateState(this.state, "interfaces", newInterfaces))
@@ -288,10 +290,11 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     name: string
     values: readonly string[]
     description?: string
+    directives?: readonly DirectiveApplication[]
   }): GraphQLSchemaBuilder<R> {
-    const { name, values, description } = config
+    const { name, values, description, directives } = config
     const newEnums = new Map(this.state.enums)
-    newEnums.set(name, { name, values, description })
+    newEnums.set(name, { name, values, description, directives })
     return this.with(updateState(this.state, "enums", newEnums))
   }
 
@@ -302,13 +305,15 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     name: string
     types: readonly string[]
     resolveType?: (value: any) => string
+    directives?: readonly DirectiveApplication[]
   }): GraphQLSchemaBuilder<R> {
-    const { name, types, resolveType } = config
+    const { name, types, resolveType, directives } = config
     const newUnions = new Map(this.state.unions)
     newUnions.set(name, {
       name,
       types,
       resolveType: resolveType ?? ((value: any) => value._tag),
+      directives,
     })
     return this.with(updateState(this.state, "unions", newUnions))
   }
@@ -320,15 +325,16 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     name?: string
     schema: S.Schema<any, any, any>
     description?: string
+    directives?: readonly DirectiveApplication[]
   }): GraphQLSchemaBuilder<R> {
-    const { schema, description } = config
+    const { schema, description, directives } = config
     const name = config.name ?? getSchemaName(schema)
     if (!name) {
       throw new Error("inputType requires a name. Either provide one explicitly or use a TaggedStruct/TaggedClass/Schema.Class")
     }
 
     const newInputs = new Map(this.state.inputs)
-    newInputs.set(name, { name, schema, description })
+    newInputs.set(name, { name, schema, description, directives })
     return this.with(updateState(this.state, "inputs", newInputs))
   }
 
@@ -580,6 +586,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
         name,
         values: enumValues,
         description: reg.description,
+        extensions: reg.directives ? { directives: reg.directives } : undefined,
       }))
     }
 
@@ -602,6 +609,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
           this.state.inputs,
           this.state.enums
         ),
+        extensions: reg.directives ? { directives: reg.directives } : undefined,
       })
       registry.set(name, inputType)
     }
@@ -639,6 +647,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
         name,
         fields: () => schemaToFields(reg.schema, sharedCtx),
         resolveType: reg.resolveType,
+        extensions: reg.directives ? { directives: reg.directives } : undefined,
       })
       registry.set(name, interfaceType)
     }
@@ -702,6 +711,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
           return baseFields
         },
         interfaces: implementedInterfaces.length > 0 ? implementedInterfaces : undefined,
+        extensions: typeReg.directives ? { directives: typeReg.directives } : undefined,
       })
       typeRegistry.set(typeName, graphqlType)
     }
@@ -712,6 +722,7 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
         name,
         types: () => reg.types.map((typeName) => typeRegistry.get(typeName)!).filter(Boolean),
         resolveType: reg.resolveType,
+        extensions: reg.directives ? { directives: reg.directives } : undefined,
       })
       unionRegistry.set(name, unionType)
     }

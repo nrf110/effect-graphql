@@ -1,0 +1,47 @@
+{
+  "name": "@effect-gql/federation",
+  "version": "0.1.0",
+  "description": "Apollo Federation 2.x support for @effect-gql/core",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "@effect-gql/core": "^0.1.0",
+    "@effect/platform": "^0.94.0",
+    "effect": "^3.19.0",
+    "graphql": "^16.0.0"
+  },
+  "devDependencies": {
+    "@effect-gql/core": "*",
+    "@effect/platform": "^0.94.0",
+    "effect": "^3.19.13",
+    "graphql": "^16.0.0"
+  },
+  "keywords": [
+    "effect",
+    "graphql",
+    "federation",
+    "apollo",
+    "microservices",
+    "subgraph"
+  ],
+  "license": "MIT"
+}

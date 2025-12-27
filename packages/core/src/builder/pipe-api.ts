@@ -32,6 +32,7 @@ export const interfaceType = (config: {
   name?: string
   schema: S.Schema<any, any, any>
   resolveType?: (value: any) => string
+  directives?: readonly DirectiveApplication[]
 }) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R> =>
   builder.interfaceType(config)
 
@@ -42,6 +43,7 @@ export const enumType = (config: {
   name: string
   values: readonly string[]
   description?: string
+  directives?: readonly DirectiveApplication[]
 }) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R> =>
   builder.enumType(config)
 
@@ -52,6 +54,7 @@ export const unionType = (config: {
   name: string
   types: readonly string[]
   resolveType?: (value: any) => string
+  directives?: readonly DirectiveApplication[]
 }) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R> =>
   builder.unionType(config)
 
@@ -63,6 +66,7 @@ export const inputType = (config: {
   name?: string
   schema: S.Schema<any, any, any>
   description?: string
+  directives?: readonly DirectiveApplication[]
 }) => <R>(builder: GraphQLSchemaBuilder<R>): GraphQLSchemaBuilder<R> =>
   builder.inputType(config)
 

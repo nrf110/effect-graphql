@@ -44,6 +44,7 @@ export interface InterfaceRegistration {
   name: string
   schema: S.Schema<any, any, any>
   resolveType: (value: any) => string
+  directives?: readonly DirectiveApplication[]
 }
 
 /**
@@ -53,6 +54,7 @@ export interface EnumRegistration {
   name: string
   values: readonly string[]
   description?: string
+  directives?: readonly DirectiveApplication[]
 }
 
 /**
@@ -62,6 +64,7 @@ export interface UnionRegistration {
   name: string
   types: readonly string[]
   resolveType: (value: any) => string
+  directives?: readonly DirectiveApplication[]
 }
 
 /**
@@ -71,6 +74,7 @@ export interface InputTypeRegistration {
   name: string
   schema: S.Schema<any, any, any>
   description?: string
+  directives?: readonly DirectiveApplication[]
 }
 
 /**

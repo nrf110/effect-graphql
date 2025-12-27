@@ -23,6 +23,8 @@
     { "path": "./packages/node" },
     { "path": "./packages/bun" },
     { "path": "./packages/web" },
-    { "path": "./packages/express" }
+    { "path": "./packages/express" },
+    { "path": "./packages/federation" },
+    { "path": "./packages/opentelemetry" }
   ]
 }
