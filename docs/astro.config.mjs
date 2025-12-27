@@ -5,13 +5,13 @@ import starlight from '@astrojs/starlight';
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://nrf110.github.io',
-	base: '/effect-graphql',
+	base: '/effect-gql',
 	integrations: [
 		starlight({
-			title: 'Effect GraphQL',
+			title: 'Effect GQL',
 			description: 'Type-safe GraphQL with Effect-TS',
 			social: [
-				{ icon: 'github', label: 'GitHub', href: 'https://github.com/nrf110/effect-graphql' },
+				{ icon: 'github', label: 'GitHub', href: 'https://github.com/nrf110/effect-gql' },
 			],
 			sidebar: [
 				{
@@ -62,7 +62,7 @@ export default defineConfig({
 					tag: 'meta',
 					attrs: {
 						property: 'og:image',
-						content: 'https://nrf110.github.io/effect-graphql/og-image.png',
+						content: 'https://nrf110.github.io/effect-gql/og-image.png',
 					},
 				},
 			],
