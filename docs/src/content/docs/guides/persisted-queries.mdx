@@ -1,0 +1,435 @@
+---
+title: Persisted Queries
+description: Apollo Persisted Queries for caching and security
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Effect GQL provides full support for [Apollo Persisted Queries](https://www.apollographql.com/docs/apollo-server/performance/apq/), enabling both Automatic Persisted Queries (APQ) for CDN caching and safelist mode for production security.
+
+## Installation
+
+```bash
+npm install @effect-gql/persisted-queries
+```
+
+## Quick Start
+
+<Tabs>
+  <TabItem label="APQ Mode">
+Automatic Persisted Queries allow clients to register queries at runtime:
+
+```typescript
+import { makePersistedQueriesRouter } from "@effect-gql/persisted-queries"
+import { serve } from "@effect-gql/node"
+
+const router = makePersistedQueriesRouter(schema, serviceLayer, {
+  mode: "apq",
+  enableGet: true,  // Enable CDN caching
+  graphiql: { path: "/graphiql" },
+})
+
+serve(router, serviceLayer, { port: 4000 })
+```
+  </TabItem>
+  <TabItem label="Safelist Mode">
+Safelist mode only allows pre-registered queries (recommended for production):
+
+```typescript
+import { makePersistedQueriesRouter, makeSafelistStore } from "@effect-gql/persisted-queries"
+import { serve } from "@effect-gql/node"
+
+const router = makePersistedQueriesRouter(schema, serviceLayer, {
+  mode: "safelist",
+  store: makeSafelistStore({
+    "ecf4edb46db40b5132295c0291d62fb65d6759a9eedfa4d5d612dd5ec54a6b38":
+      "query GetUser($id: ID!) { user(id: $id) { name email } }",
+    "a1b2c3d4e5f6...":
+      "query GetPosts { posts { title author { name } } }",
+  }),
+  graphiql: { path: "/graphiql" },
+})
+
+serve(router, serviceLayer, { port: 4000 })
+```
+  </TabItem>
+</Tabs>
+
+## How It Works
+
+### APQ Protocol
+
+1. Client sends request with only the query hash
+2. If hash is found, execute the stored query
+3. If hash is NOT found and query is provided, store it and execute
+4. If hash is NOT found and NO query, return `PERSISTED_QUERY_NOT_FOUND`
+5. Client retries with both hash and full query
+
+```
+┌────────┐                         ┌────────┐
+│ Client │                         │ Server │
+└───┬────┘                         └───┬────┘
+    │ POST { hash: "abc123" }          │
+    │─────────────────────────────────>│
+    │                                  │ Cache miss
+    │     PERSISTED_QUERY_NOT_FOUND    │
+    │<─────────────────────────────────│
+    │                                  │
+    │ POST { hash: "abc123",           │
+    │        query: "{ users {...} }" }│
+    │─────────────────────────────────>│
+    │                                  │ Store & execute
+    │         { data: {...} }          │
+    │<─────────────────────────────────│
+    │                                  │
+    │ POST { hash: "abc123" }          │
+    │─────────────────────────────────>│
+    │                                  │ Cache hit
+    │         { data: {...} }          │
+    │<─────────────────────────────────│
+```
+
+### GET Request Support
+
+When `enableGet: true`, clients can send queries via GET requests:
+
+```
+GET /graphql?extensions={"persistedQuery":{"version":1,"sha256Hash":"abc123"}}
+```
+
+This enables CDN caching since the URL uniquely identifies the query.
+
+## Operating Modes
+
+### APQ Mode (Default)
+
+Best for development and internal APIs. Queries are registered at runtime.
+
+```typescript
+makePersistedQueriesRouter(schema, serviceLayer, {
+  mode: "apq",
+})
+```
+
+**Pros:**
+- Zero configuration required
+- Works with any Apollo client
+- Reduces bandwidth after first request
+
+**Cons:**
+- Any client can register queries
+- First request has higher latency
+
+### Safelist Mode
+
+Best for production APIs. Only pre-registered queries are allowed.
+
+```typescript
+import { makeSafelistStore } from "@effect-gql/persisted-queries"
+
+makePersistedQueriesRouter(schema, serviceLayer, {
+  mode: "safelist",
+  store: makeSafelistStore({
+    // Hash -> Query mapping
+    "abc123...": "query GetUser { ... }",
+    "def456...": "mutation CreateUser { ... }",
+  }),
+})
+```
+
+**Pros:**
+- Complete control over allowed queries
+- Prevents malicious queries
+- Query complexity is known in advance
+
+**Cons:**
+- Requires build-time query extraction
+- Must redeploy to add new queries
+
+<Aside type="tip">
+Use tools like [graphql-codegen](https://the-guild.dev/graphql/codegen) or [Apollo's client CLI](https://www.apollographql.com/docs/devtools/cli/) to extract query hashes at build time.
+</Aside>
+
+## Configuration Options
+
+```typescript
+interface PersistedQueriesRouterOptions {
+  // Operating mode: "apq" (default) or "safelist"
+  mode?: "apq" | "safelist"
+
+  // Query store (default: in-memory with 1000 entries)
+  store?: Layer<PersistedQueryStore>
+
+  // Enable GET requests for CDN caching (default: true)
+  enableGet?: boolean
+
+  // Validate query hash when storing (default: true)
+  validateHash?: boolean
+
+  // Hash algorithm (default: "sha256")
+  hashAlgorithm?: "sha256" | "sha512"
+
+  // Standard router options
+  path?: string
+  graphiql?: boolean | { path?: string; endpoint?: string }
+  complexity?: { maxDepth?: number; maxComplexity?: number }
+}
+```
+
+## Custom Stores
+
+### Memory Store with Custom Size
+
+```typescript
+import { makeMemoryStore } from "@effect-gql/persisted-queries"
+
+makePersistedQueriesRouter(schema, serviceLayer, {
+  store: makeMemoryStore({ maxSize: 5000 }),
+})
+```
+
+### Custom Store Implementation
+
+Implement the `PersistedQueryStore` interface for Redis, database, or other backends:
+
+```typescript
+import { Context, Effect, Layer, Option } from "effect"
+import { PersistedQueryStore } from "@effect-gql/persisted-queries"
+
+// Example: Redis-backed store
+const RedisStore = Layer.succeed(PersistedQueryStore, {
+  get: (hash) => Effect.gen(function* () {
+    const redis = yield* RedisClient
+    const query = yield* redis.get(`pq:${hash}`)
+    return query ? Option.some(query) : Option.none()
+  }),
+
+  set: (hash, query) => Effect.gen(function* () {
+    const redis = yield* RedisClient
+    yield* redis.set(`pq:${hash}`, query, { ex: 86400 })
+  }),
+})
+
+makePersistedQueriesRouter(schema, serviceLayer, {
+  store: RedisStore,
+})
+```
+
+## Environment Configuration
+
+Configure via environment variables:
+
+```bash
+PERSISTED_QUERIES_MODE=apq          # or "safelist"
+PERSISTED_QUERIES_ENABLE_GET=true
+PERSISTED_QUERIES_VALIDATE_HASH=true
+```
+
+Load with Effect Config:
+
+```typescript
+import { Config, Effect } from "effect"
+import { PersistedQueriesConfigFromEnv } from "@effect-gql/persisted-queries"
+
+const program = Effect.gen(function* () {
+  const config = yield* Config.unwrap(PersistedQueriesConfigFromEnv)
+  // config.mode, config.enableGet, config.validateHash
+})
+```
+
+## Error Handling
+
+The router returns standard GraphQL errors for persisted query issues:
+
+### PERSISTED_QUERY_NOT_FOUND
+
+Returned in APQ mode when the hash isn't cached and no query is provided:
+
+```json
+{
+  "errors": [{
+    "message": "PersistedQueryNotFound",
+    "extensions": {
+      "code": "PERSISTED_QUERY_NOT_FOUND"
+    }
+  }]
+}
+```
+
+Apollo clients automatically retry with the full query.
+
+### PERSISTED_QUERY_NOT_ALLOWED
+
+Returned in safelist mode when the query isn't in the allowlist:
+
+```json
+{
+  "errors": [{
+    "message": "Persisted query not in safelist",
+    "extensions": {
+      "code": "PERSISTED_QUERY_NOT_ALLOWED",
+      "hash": "abc123..."
+    }
+  }]
+}
+```
+
+### HASH_MISMATCH
+
+Returned when `validateHash: true` and the provided query doesn't match its hash:
+
+```json
+{
+  "errors": [{
+    "message": "Provided query does not match hash",
+    "extensions": {
+      "code": "PERSISTED_QUERY_HASH_MISMATCH",
+      "providedHash": "abc123...",
+      "computedHash": "def456..."
+    }
+  }]
+}
+```
+
+## Client Configuration
+
+### Apollo Client
+
+Apollo Client has built-in APQ support:
+
+```typescript
+import { ApolloClient, InMemoryCache } from "@apollo/client"
+import { createPersistedQueryLink } from "@apollo/client/link/persisted-queries"
+import { HttpLink } from "@apollo/client/link/http"
+import { sha256 } from "crypto-hash"
+
+const link = createPersistedQueryLink({ sha256 }).concat(
+  new HttpLink({ uri: "/graphql" })
+)
+
+const client = new ApolloClient({
+  link,
+  cache: new InMemoryCache(),
+})
+```
+
+### urql
+
+```typescript
+import { Client, fetchExchange } from "urql"
+import { persistedExchange } from "@urql/exchange-persisted"
+
+const client = new Client({
+  url: "/graphql",
+  exchanges: [
+    persistedExchange({
+      preferGetForPersistedQueries: true,
+    }),
+    fetchExchange,
+  ],
+})
+```
+
+## Complete Example
+
+```typescript
+import { Effect, Context, Layer } from "effect"
+import * as S from "effect/Schema"
+import { GraphQLSchemaBuilder } from "@effect-gql/core"
+import { makePersistedQueriesRouter, makeSafelistStore } from "@effect-gql/persisted-queries"
+import { serve } from "@effect-gql/node"
+
+// Schema
+const UserSchema = S.Struct({
+  id: S.String,
+  name: S.String,
+  email: S.String,
+})
+
+// Service
+class UserService extends Context.Tag("UserService")<
+  UserService,
+  { getAll: () => Effect.Effect<S.Schema.Type<typeof UserSchema>[]> }
+>() {}
+
+// Build schema
+const schema = GraphQLSchemaBuilder.empty
+  .objectType({ name: "User", schema: UserSchema })
+  .query("users", {
+    type: S.Array(UserSchema),
+    resolve: () => Effect.gen(function* () {
+      const userService = yield* UserService
+      return yield* userService.getAll()
+    }),
+  })
+  .buildSchema()
+
+// Service layer
+const UserServiceLive = Layer.succeed(UserService, {
+  getAll: () => Effect.succeed([
+    { id: "1", name: "Alice", email: "alice@example.com" },
+    { id: "2", name: "Bob", email: "bob@example.com" },
+  ]),
+})
+
+// Production: Safelist mode with pre-registered queries
+const router = makePersistedQueriesRouter(schema, UserServiceLive, {
+  mode: "safelist",
+  store: makeSafelistStore({
+    // Query hashes extracted at build time
+    "7c211433f02071597741e6ff5a8ea34789abbf43f78e67b7d4e5441cf3af3d0e":
+      "query GetUsers { users { id name email } }",
+  }),
+  enableGet: true,  // CDN caching
+  graphiql: process.env.NODE_ENV !== "production",
+})
+
+serve(router, UserServiceLive, {
+  port: 4000,
+  onStart: (url) => console.log(`Server running at ${url}`),
+})
+```
+
+## Security Considerations
+
+1. **Use safelist mode in production** - Prevents arbitrary query execution
+2. **Enable hash validation** - Prevents hash collision attacks
+3. **Limit store size** - Prevents memory exhaustion in APQ mode
+4. **Monitor query registration** - Log new queries in APQ mode for review
+
+## API Reference
+
+### Router
+
+| Export | Description |
+|--------|-------------|
+| `makePersistedQueriesRouter(schema, layer, options)` | Create router with APQ support |
+
+### Stores
+
+| Export | Description |
+|--------|-------------|
+| `makeMemoryStore({ maxSize? })` | In-memory LRU store |
+| `makeSafelistStore(queries)` | Read-only store from hash->query map |
+| `PersistedQueryStore` | Service tag for custom implementations |
+
+### Configuration
+
+| Export | Description |
+|--------|-------------|
+| `PersistedQueriesConfigFromEnv` | Effect Config for environment variables |
+
+### Errors
+
+| Export | Description |
+|--------|-------------|
+| `PersistedQueryNotFoundError` | Hash not in store, query needed |
+| `PersistedQueryNotAllowedError` | Query not in safelist |
+| `PersistedQueryHashMismatchError` | Query doesn't match hash |
+| `PersistedQueryVersionError` | Unsupported APQ version |
+
+## Next Steps
+
+- [Server Integration](/effect-gql/guides/server-integration) - Deploy with health checks and CORS
+- [Complexity Limiting](/effect-gql/guides/complexity-limiting) - Combine with query complexity limits
+- [OpenTelemetry](/effect-gql/guides/opentelemetry) - Trace persisted query lookups

@@ -1,0 +1,425 @@
+---
+title: Apollo Federation
+description: Build federated GraphQL subgraphs with Effect GQL
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Effect GQL provides first-class support for [Apollo Federation 2.x](https://www.apollographql.com/docs/federation/), enabling you to build federated subgraphs with full type safety and Effect's powerful service system.
+
+## Installation
+
+```bash
+npm install @effect-gql/federation
+```
+
+## Quick Start
+
+```typescript
+import { Effect, Layer } from "effect"
+import * as S from "effect/Schema"
+import { FederatedSchemaBuilder, entity, query, key } from "@effect-gql/federation"
+import { serve } from "@effect-gql/node"
+
+// Define your entity schema
+const UserSchema = S.Struct({
+  id: S.String,
+  name: S.String,
+  email: S.String,
+})
+
+type User = S.Schema.Type<typeof UserSchema>
+
+// Build a federated subgraph
+const { schema, sdl } = FederatedSchemaBuilder.empty.pipe(
+  // Register User as a federated entity
+  entity({
+    name: "User",
+    schema: UserSchema,
+    keys: [key({ fields: "id" })],
+    resolveReference: (ref) => Effect.gen(function* () {
+      const userService = yield* UserService
+      return yield* userService.findById(ref.id)
+    }),
+  }),
+
+  // Add subgraph-specific queries
+  query("me", {
+    type: UserSchema,
+    resolve: () => Effect.gen(function* () {
+      const auth = yield* AuthService
+      return yield* auth.getCurrentUser()
+    }),
+  }),
+).buildFederatedSchema()
+
+// The schema is ready to serve with Apollo Router
+console.log("Federation SDL:\n", sdl)
+```
+
+## Core Concepts
+
+### Entities
+
+Entities are the building blocks of Apollo Federation. They're types that can be referenced and resolved across subgraph boundaries.
+
+```typescript
+import { entity, key } from "@effect-gql/federation"
+
+FederatedSchemaBuilder.empty.pipe(
+  entity({
+    name: "Product",
+    schema: ProductSchema,
+    keys: [key({ fields: "id" })],
+    resolveReference: (ref) => Effect.gen(function* () {
+      const productService = yield* ProductService
+      return yield* productService.findById(ref.id)
+    }),
+  }),
+)
+```
+
+The `resolveReference` function is called by the Apollo Router when another subgraph references this entity. It receives the entity representation (key fields) and must return the full entity.
+
+### Multiple Keys
+
+Entities can have multiple keys for different lookup patterns:
+
+```typescript
+entity({
+  name: "User",
+  schema: UserSchema,
+  keys: [
+    key({ fields: "id" }),
+    key({ fields: "email" }),
+  ],
+  resolveReference: (ref) => Effect.gen(function* () {
+    const userService = yield* UserService
+    if ("id" in ref) {
+      return yield* userService.findById(ref.id)
+    }
+    return yield* userService.findByEmail(ref.email)
+  }),
+})
+```
+
+### Compound Keys
+
+Use compound keys for entities identified by multiple fields:
+
+```typescript
+entity({
+  name: "Review",
+  schema: ReviewSchema,
+  keys: [key({ fields: "userId productId" })],
+  resolveReference: (ref) => Effect.gen(function* () {
+    const reviewService = yield* ReviewService
+    return yield* reviewService.findByUserAndProduct(ref.userId, ref.productId)
+  }),
+})
+```
+
+## Federation Directives
+
+### Type-Level Directives
+
+#### @shareable
+
+Marks a type as resolvable by multiple subgraphs:
+
+```typescript
+import { entity, key, shareable } from "@effect-gql/federation"
+
+entity({
+  name: "Product",
+  schema: ProductSchema,
+  keys: [key({ fields: "id" })],
+  directives: [shareable()],
+  resolveReference: (ref) => ProductService.findById(ref.id),
+})
+```
+
+#### @inaccessible
+
+Hides a type or field from the public API while keeping it available for federation:
+
+```typescript
+import { objectType, inaccessible } from "@effect-gql/federation"
+
+objectType({
+  name: "InternalMetadata",
+  schema: MetadataSchema,
+  directives: [inaccessible()],
+})
+```
+
+#### @tag
+
+Adds metadata tags for documentation or tooling:
+
+```typescript
+entity({
+  name: "Product",
+  schema: ProductSchema,
+  keys: [key({ fields: "id" })],
+  directives: [tag("public"), tag("catalog")],
+  resolveReference: (ref) => ProductService.findById(ref.id),
+})
+```
+
+### Field-Level Directives
+
+#### @external
+
+Marks a field as defined in another subgraph:
+
+```typescript
+import { field, external } from "@effect-gql/federation"
+
+// In reviews subgraph, reference the User entity
+entity({
+  name: "User",
+  schema: S.Struct({ id: S.String }),
+  keys: [key({ fields: "id", resolvable: false })],
+  resolveReference: () => Effect.succeed(null), // Stub - resolved by users subgraph
+}).pipe(
+  field("User", "id", {
+    type: S.String,
+    directives: [external()],
+    resolve: (parent) => Effect.succeed(parent.id),
+  }),
+)
+```
+
+#### @requires
+
+Specifies fields needed from other subgraphs before resolution:
+
+```typescript
+import { field, requires } from "@effect-gql/federation"
+
+field("Product", "shippingEstimate", {
+  type: S.Int,
+  directives: [requires({ fields: "weight dimensions { height width }" })],
+  resolve: (product) => Effect.gen(function* () {
+    const shipping = yield* ShippingService
+    return yield* shipping.calculateEstimate(product.weight, product.dimensions)
+  }),
+})
+```
+
+#### @provides
+
+Optimization hint indicating this field provides additional data:
+
+```typescript
+import { field, provides } from "@effect-gql/federation"
+
+field("Review", "author", {
+  type: UserSchema,
+  directives: [provides({ fields: "name email" })],
+  resolve: (review) => Effect.gen(function* () {
+    const userService = yield* UserService
+    return yield* userService.findById(review.authorId)
+  }),
+})
+```
+
+#### @override
+
+Transfers resolution responsibility from another subgraph:
+
+```typescript
+import { field, override } from "@effect-gql/federation"
+
+field("Product", "price", {
+  type: S.Number,
+  directives: [override({ from: "legacy-pricing" })],
+  resolve: (product) => Effect.gen(function* () {
+    const pricing = yield* PricingService
+    return yield* pricing.getPrice(product.id)
+  }),
+})
+```
+
+## Complete Example
+
+Here's a complete example of a federated Users subgraph:
+
+```typescript
+import { Effect, Context, Layer } from "effect"
+import * as S from "effect/Schema"
+import {
+  FederatedSchemaBuilder,
+  entity,
+  query,
+  mutation,
+  key,
+  shareable,
+} from "@effect-gql/federation"
+import { serve } from "@effect-gql/node"
+
+// Schemas
+const UserSchema = S.Struct({
+  id: S.String,
+  name: S.String,
+  email: S.String,
+  role: S.Literal("USER", "ADMIN"),
+})
+
+type User = S.Schema.Type<typeof UserSchema>
+
+// Service
+class UserService extends Context.Tag("UserService")<
+  UserService,
+  {
+    findById: (id: string) => Effect.Effect<User | null>
+    findByEmail: (email: string) => Effect.Effect<User | null>
+    getCurrentUser: () => Effect.Effect<User>
+    createUser: (name: string, email: string) => Effect.Effect<User>
+  }
+>() {}
+
+// Build federated schema
+const { schema, sdl } = FederatedSchemaBuilder.empty.pipe(
+  // User entity with multiple keys
+  entity({
+    name: "User",
+    schema: UserSchema,
+    keys: [
+      key({ fields: "id" }),
+      key({ fields: "email" }),
+    ],
+    directives: [shareable()],
+    resolveReference: (ref) => Effect.gen(function* () {
+      const userService = yield* UserService
+      if ("id" in ref && ref.id) {
+        return yield* userService.findById(ref.id)
+      }
+      if ("email" in ref && ref.email) {
+        return yield* userService.findByEmail(ref.email)
+      }
+      return null
+    }),
+  }),
+
+  // Queries
+  query("me", {
+    type: UserSchema,
+    resolve: () => Effect.gen(function* () {
+      const userService = yield* UserService
+      return yield* userService.getCurrentUser()
+    }),
+  }),
+
+  query("user", {
+    type: S.NullOr(UserSchema),
+    args: S.Struct({ id: S.String }),
+    resolve: ({ id }) => Effect.gen(function* () {
+      const userService = yield* UserService
+      return yield* userService.findById(id)
+    }),
+  }),
+
+  // Mutations
+  mutation("createUser", {
+    type: UserSchema,
+    args: S.Struct({
+      name: S.String,
+      email: S.String,
+    }),
+    resolve: ({ name, email }) => Effect.gen(function* () {
+      const userService = yield* UserService
+      return yield* userService.createUser(name, email)
+    }),
+  }),
+).buildFederatedSchema()
+
+// Service implementation
+const UserServiceLive = Layer.succeed(UserService, {
+  findById: (id) => Effect.succeed({ id, name: "Alice", email: "alice@example.com", role: "USER" }),
+  findByEmail: (email) => Effect.succeed({ id: "1", name: "Alice", email, role: "USER" }),
+  getCurrentUser: () => Effect.succeed({ id: "1", name: "Alice", email: "alice@example.com", role: "USER" }),
+  createUser: (name, email) => Effect.succeed({ id: "2", name, email, role: "USER" }),
+})
+
+// Serve
+import { makeGraphQLRouter } from "@effect-gql/core/server"
+
+const router = makeGraphQLRouter(schema, UserServiceLive, { graphiql: true })
+serve(router, UserServiceLive, {
+  port: 4001,
+  onStart: (url) => console.log(`Users subgraph running at ${url}`),
+})
+```
+
+## Running with Apollo Router
+
+1. Start your subgraphs (each on a different port)
+2. Create a `supergraph.yaml` configuration:
+
+```yaml
+federation_version: =2.3.0
+subgraphs:
+  users:
+    routing_url: http://localhost:4001/graphql
+    schema:
+      subgraph_url: http://localhost:4001/graphql
+  products:
+    routing_url: http://localhost:4002/graphql
+    schema:
+      subgraph_url: http://localhost:4002/graphql
+```
+
+3. Compose and run Apollo Router:
+
+```bash
+# Install rover CLI
+npm install -g @apollo/rover
+
+# Compose supergraph
+rover supergraph compose --config supergraph.yaml > supergraph.graphql
+
+# Run Apollo Router
+router --supergraph supergraph.graphql
+```
+
+<Aside type="tip">
+During development, you can use `rover dev` for automatic supergraph composition as you modify subgraphs.
+</Aside>
+
+## API Reference
+
+### FederatedSchemaBuilder
+
+| Method | Description |
+|--------|-------------|
+| `FederatedSchemaBuilder.empty` | Create an empty builder |
+| `FederatedSchemaBuilder.create(config)` | Create with custom config |
+| `.entity(config)` | Register a federated entity |
+| `.query(name, config)` | Add a query field |
+| `.mutation(name, config)` | Add a mutation field |
+| `.subscription(name, config)` | Add a subscription field |
+| `.objectType(config)` | Register a non-entity object type |
+| `.field(typeName, fieldName, config)` | Add a computed field |
+| `.buildFederatedSchema()` | Build schema with `_entities` and `_service` |
+| `.buildSchema()` | Build standard schema (for testing) |
+
+### Directive Factories
+
+| Factory | Description |
+|---------|-------------|
+| `key({ fields, resolvable? })` | Entity key for cross-subgraph resolution |
+| `shareable()` | Type can be resolved by multiple subgraphs |
+| `inaccessible()` | Hide from public API |
+| `tag(name)` | Add metadata tag |
+| `external()` | Field defined in another subgraph |
+| `requires({ fields })` | Fields needed before resolution |
+| `provides({ fields })` | Fields this resolver provides |
+| `override({ from, label? })` | Take over from another subgraph |
+
+## Next Steps
+
+- [Server Integration](/effect-gql/guides/server-integration) - Deploy your subgraph
+- [Error Handling](/effect-gql/guides/error-handling) - Handle federation errors
+- [DataLoader](/effect-gql/guides/dataloader) - Optimize entity resolution
