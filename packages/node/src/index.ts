@@ -1,5 +1,8 @@
 export { serve, type ServeOptions } from "./serve"
 
+// HTTP utilities
+export { toWebHeaders } from "./http-utils"
+
 // WebSocket subscription support
 export {
   toEffectWebSocket,

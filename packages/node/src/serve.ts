@@ -4,6 +4,7 @@ import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
 import { createServer, Server } from "node:http"
 import type { GraphQLSchema } from "graphql"
 import type { GraphQLWSOptions } from "@effect-gql/core"
+import { toWebHeaders } from "./http-utils"
 
 /**
  * Configuration for WebSocket subscriptions
@@ -150,16 +151,7 @@ function serveWithSubscriptions<E, R, RE>(
         // Use URL constructor for safe URL parsing (avoids injection via req.url)
         const baseUrl = `http://${host === "0.0.0.0" ? "localhost" : host}:${port}`
         const url = new URL(req.url || "/", baseUrl).href
-        const headers = new Headers()
-        for (const [key, value] of Object.entries(req.headers)) {
-          if (value) {
-            if (Array.isArray(value)) {
-              value.forEach((v) => headers.append(key, v))
-            } else {
-              headers.set(key, value)
-            }
-          }
-        }
+        const headers = toWebHeaders(req.headers)
 
         const webRequest = new Request(url, {
           method: req.method,

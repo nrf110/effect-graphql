@@ -1,6 +1,7 @@
 import { Layer } from "effect"
 import { HttpApp, HttpRouter } from "@effect/platform"
 import type { Request, Response, NextFunction, RequestHandler } from "express"
+import { toWebHeaders } from "./http-utils"
 
 /**
  * Convert an HttpRouter to Express middleware.
@@ -39,16 +40,7 @@ export const toMiddleware = <E, R, RE>(
       // Use URL constructor for safe URL parsing (avoids Host header injection)
       const baseUrl = `${req.protocol}://${req.hostname}`
       const url = new URL(req.originalUrl || "/", baseUrl).href
-      const headers = new Headers()
-      for (const [key, value] of Object.entries(req.headers)) {
-        if (value) {
-          if (Array.isArray(value)) {
-            value.forEach((v) => headers.append(key, v))
-          } else {
-            headers.set(key, value)
-          }
-        }
-      }
+      const headers = toWebHeaders(req.headers)
 
       const webRequest = new Request(url, {
         method: req.method,

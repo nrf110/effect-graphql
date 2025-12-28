@@ -180,6 +180,27 @@ export const makeExtensionsService = (): Effect.Effect<ExtensionsService, never,
   })
 
 /**
+ * Generic helper to run extension hooks with error handling.
+ * Filters extensions that have the specified hook, runs them,
+ * and logs warnings if any hook fails.
+ */
+const runExtensionHooks = <R, K extends keyof GraphQLExtension<R>>(
+  extensions: readonly GraphQLExtension<R>[],
+  hookName: K,
+  getHookEffect: (ext: GraphQLExtension<R>) => Effect.Effect<void, never, R>
+): Effect.Effect<void, never, R> =>
+  Effect.forEach(
+    extensions.filter((ext) => ext[hookName] !== undefined),
+    (ext) =>
+      getHookEffect(ext).pipe(
+        Effect.catchAllCause((cause) =>
+          Effect.logWarning(`Extension "${ext.name}" ${String(hookName)} hook failed`, cause)
+        )
+      ),
+    { discard: true }
+  ) as Effect.Effect<void, never, R>
+
+/**
  * Run all onParse hooks for registered extensions
  */
 export const runParseHooks = <R>(
@@ -187,16 +208,7 @@ export const runParseHooks = <R>(
   source: string,
   document: DocumentNode
 ): Effect.Effect<void, never, R> =>
-  Effect.forEach(
-    extensions.filter((ext) => ext.onParse !== undefined),
-    (ext) =>
-      ext.onParse!(source, document).pipe(
-        Effect.catchAllCause((cause) =>
-          Effect.logWarning(`Extension "${ext.name}" onParse hook failed`, cause)
-        )
-      ),
-    { discard: true }
-  ) as Effect.Effect<void, never, R>
+  runExtensionHooks(extensions, "onParse", (ext) => ext.onParse!(source, document))
 
 /**
  * Run all onValidate hooks for registered extensions
@@ -206,16 +218,7 @@ export const runValidateHooks = <R>(
   document: DocumentNode,
   errors: readonly GraphQLError[]
 ): Effect.Effect<void, never, R> =>
-  Effect.forEach(
-    extensions.filter((ext) => ext.onValidate !== undefined),
-    (ext) =>
-      ext.onValidate!(document, errors).pipe(
-        Effect.catchAllCause((cause) =>
-          Effect.logWarning(`Extension "${ext.name}" onValidate hook failed`, cause)
-        )
-      ),
-    { discard: true }
-  ) as Effect.Effect<void, never, R>
+  runExtensionHooks(extensions, "onValidate", (ext) => ext.onValidate!(document, errors))
 
 /**
  * Run all onExecuteStart hooks for registered extensions
@@ -224,16 +227,7 @@ export const runExecuteStartHooks = <R>(
   extensions: readonly GraphQLExtension<R>[],
   args: ExecutionArgs
 ): Effect.Effect<void, never, R> =>
-  Effect.forEach(
-    extensions.filter((ext) => ext.onExecuteStart !== undefined),
-    (ext) =>
-      ext.onExecuteStart!(args).pipe(
-        Effect.catchAllCause((cause) =>
-          Effect.logWarning(`Extension "${ext.name}" onExecuteStart hook failed`, cause)
-        )
-      ),
-    { discard: true }
-  ) as Effect.Effect<void, never, R>
+  runExtensionHooks(extensions, "onExecuteStart", (ext) => ext.onExecuteStart!(args))
 
 /**
  * Run all onExecuteEnd hooks for registered extensions
@@ -242,13 +236,4 @@ export const runExecuteEndHooks = <R>(
   extensions: readonly GraphQLExtension<R>[],
   result: ExecutionResult
 ): Effect.Effect<void, never, R> =>
-  Effect.forEach(
-    extensions.filter((ext) => ext.onExecuteEnd !== undefined),
-    (ext) =>
-      ext.onExecuteEnd!(result).pipe(
-        Effect.catchAllCause((cause) =>
-          Effect.logWarning(`Extension "${ext.name}" onExecuteEnd hook failed`, cause)
-        )
-      ),
-    { discard: true }
-  ) as Effect.Effect<void, never, R>
+  runExtensionHooks(extensions, "onExecuteEnd", (ext) => ext.onExecuteEnd!(result))

@@ -9,6 +9,7 @@ import {
   type SSESubscriptionRequest,
   SSEError,
 } from "@effect-gql/core"
+import { toWebHeaders } from "./http-utils"
 
 /**
  * Options for Express SSE middleware
@@ -115,16 +116,7 @@ export const sseMiddleware = <R>(
     }
 
     // Convert Express headers to web Headers
-    const headers = new Headers()
-    for (const [key, value] of Object.entries(req.headers)) {
-      if (value) {
-        if (Array.isArray(value)) {
-          value.forEach((v) => headers.append(key, v))
-        } else {
-          headers.set(key, value)
-        }
-      }
-    }
+    const headers = toWebHeaders(req.headers)
 
     // Set SSE headers
     res.writeHead(200, SSE_HEADERS)
@@ -241,16 +233,7 @@ export const createSSEHandler = <R>(
     }
 
     // Convert Express headers to web Headers
-    const headers = new Headers()
-    for (const [key, value] of Object.entries(req.headers)) {
-      if (value) {
-        if (Array.isArray(value)) {
-          value.forEach((v) => headers.append(key, v))
-        } else {
-          headers.set(key, value)
-        }
-      }
-    }
+    const headers = toWebHeaders(req.headers)
 
     // Set SSE headers
     res.writeHead(200, SSE_HEADERS)

@@ -13,16 +13,13 @@ export interface MemoryStoreConfig {
   readonly maxSize?: number
 }
 
-interface CacheEntry {
-  readonly query: string
-  accessOrder: number
-}
-
-// Global counter for access ordering (monotonically increasing)
-let accessCounter = 0
-
 /**
  * Create an in-memory LRU (Least Recently Used) store for persisted queries.
+ *
+ * This implementation uses Map's natural insertion order for O(1) LRU operations:
+ * - get: O(1) - delete and re-insert to move to end (most recently used)
+ * - set: O(1) - insert at end, evict from front if needed
+ * - eviction: O(1) - delete first entry (least recently used)
  *
  * This is the default store implementation suitable for single-instance servers.
  * For multi-instance deployments, consider using a shared store like Redis.
@@ -48,25 +45,22 @@ export const makeMemoryStore = (
 ): Layer.Layer<PersistedQueryStore> => {
   const maxSize = config.maxSize ?? 1000
 
-  // Create the cache once when the layer is created (not when it's used)
-  const cache = new Map<string, CacheEntry>()
+  // Map maintains insertion order - we use this for O(1) LRU
+  // First entry = least recently used, last entry = most recently used
+  const cache = new Map<string, string>()
 
-  const getNextAccessOrder = () => ++accessCounter
+  // Move entry to end (most recently used) by deleting and re-inserting
+  const touch = (hash: string, query: string): void => {
+    cache.delete(hash)
+    cache.set(hash, query)
+  }
 
-  const evictLRU = (): void => {
+  // Evict oldest entry (first in Map) if over capacity - O(1)
+  const evictIfNeeded = (): void => {
     if (cache.size <= maxSize) return
-
-    // Find and remove LRU entry (lowest access order)
-    let oldestKey: string | undefined
-    let oldestOrder = Infinity
-    for (const [key, entry] of cache) {
-      if (entry.accessOrder < oldestOrder) {
-        oldestOrder = entry.accessOrder
-        oldestKey = key
-      }
-    }
-
-    if (oldestKey) {
+    // Map.keys().next() gives us the first (oldest) key in O(1)
+    const oldestKey = cache.keys().next().value
+    if (oldestKey !== undefined) {
       cache.delete(oldestKey)
     }
   }
@@ -76,19 +70,21 @@ export const makeMemoryStore = (
     PersistedQueryStore.of({
       get: (hash) =>
         Effect.sync(() => {
-          const entry = cache.get(hash)
-          if (!entry) {
+          const query = cache.get(hash)
+          if (query === undefined) {
             return Option.none<string>()
           }
-          // Update access order
-          entry.accessOrder = getNextAccessOrder()
-          return Option.some(entry.query)
+          // Move to end (most recently used)
+          touch(hash, query)
+          return Option.some(query)
         }),
 
       set: (hash, query) =>
         Effect.sync(() => {
-          cache.set(hash, { query, accessOrder: getNextAccessOrder() })
-          evictLRU()
+          // If key exists, delete first to ensure it moves to end
+          cache.delete(hash)
+          cache.set(hash, query)
+          evictIfNeeded()
         }),
 
       has: (hash) =>

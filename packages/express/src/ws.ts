@@ -1,4 +1,4 @@
-import { Effect, Stream, Queue, Deferred, Layer } from "effect"
+import { Effect, Layer } from "effect"
 import type { Server } from "node:http"
 import type { IncomingMessage } from "node:http"
 import type { Duplex } from "node:stream"
@@ -6,10 +6,8 @@ import { WebSocket, WebSocketServer } from "ws"
 import { GraphQLSchema } from "graphql"
 import {
   makeGraphQLWSHandler,
-  type EffectWebSocket,
+  toEffectWebSocketFromWs,
   type GraphQLWSOptions,
-  WebSocketError,
-  type CloseEvent,
 } from "@effect-gql/core"
 
 /**
@@ -21,115 +19,6 @@ export interface ExpressWSOptions<R> extends GraphQLWSOptions<R> {
    * @default "/graphql"
    */
   readonly path?: string
-}
-
-/**
- * Convert a Node.js WebSocket (from 'ws' library) to an EffectWebSocket.
- *
- * This creates an Effect-based wrapper around the ws WebSocket instance,
- * providing a Stream for incoming messages and Effect-based send/close operations.
- *
- * @param ws - The WebSocket instance from the 'ws' library
- * @returns An EffectWebSocket that can be used with makeGraphQLWSHandler
- */
-const toEffectWebSocket = (ws: WebSocket): EffectWebSocket => {
-  // Create the message stream using a queue
-  const messagesEffect = Effect.gen(function* () {
-    const queue = yield* Queue.unbounded<string>()
-    const closed = yield* Deferred.make<CloseEvent, WebSocketError>()
-
-    // Set up message listener
-    ws.on("message", (data) => {
-      const message = data.toString()
-      Effect.runPromise(Queue.offer(queue, message)).catch(() => {
-        // Queue might be shutdown
-      })
-    })
-
-    // Set up error listener
-    ws.on("error", (error) => {
-      Effect.runPromise(
-        Deferred.fail(closed, new WebSocketError({ cause: error }))
-      ).catch(() => {
-        // Already completed
-      })
-    })
-
-    // Set up close listener
-    ws.on("close", (code, reason) => {
-      Effect.runPromise(
-        Queue.shutdown(queue).pipe(
-          Effect.andThen(
-            Deferred.succeed(closed, { code, reason: reason.toString() })
-          )
-        )
-      ).catch(() => {
-        // Already completed
-      })
-    })
-
-    return { queue, closed }
-  })
-
-  // Create the message stream
-  const messages: Stream.Stream<string, WebSocketError> = Stream.unwrap(
-    messagesEffect.pipe(
-      Effect.map(({ queue }) =>
-        Stream.fromQueue(queue).pipe(
-          Stream.catchAll(() => Stream.empty)
-        )
-      )
-    )
-  )
-
-  return {
-    protocol: ws.protocol || "graphql-transport-ws",
-
-    send: (data: string) =>
-      Effect.async<void, WebSocketError>((resume) => {
-        ws.send(data, (error) => {
-          if (error) {
-            resume(Effect.fail(new WebSocketError({ cause: error })))
-          } else {
-            resume(Effect.succeed(undefined))
-          }
-        })
-      }),
-
-    close: (code?: number, reason?: string) =>
-      Effect.sync(() => {
-        ws.close(code ?? 1000, reason ?? "")
-      }),
-
-    messages,
-
-    closed: Effect.async<CloseEvent, WebSocketError>((resume) => {
-      if (ws.readyState === WebSocket.CLOSED) {
-        resume(Effect.succeed({ code: 1000, reason: "" }))
-        return
-      }
-
-      const onClose = (code: number, reason: Buffer) => {
-        cleanup()
-        resume(Effect.succeed({ code, reason: reason.toString() }))
-      }
-
-      const onError = (error: Error) => {
-        cleanup()
-        resume(Effect.fail(new WebSocketError({ cause: error })))
-      }
-
-      const cleanup = () => {
-        ws.removeListener("close", onClose)
-        ws.removeListener("error", onError)
-      }
-
-      ws.on("close", onClose)
-      ws.on("error", onError)
-
-      return Effect.sync(cleanup)
-    }),
-  }
 }
 
 /**
@@ -205,7 +94,7 @@ export const attachWebSocket = <R>(
   wss.on("connection", (ws) => {
     activeConnections.add(ws)
 
-    const effectSocket = toEffectWebSocket(ws)
+    const effectSocket = toEffectWebSocketFromWs(ws)
 
     // Run the handler
     Effect.runPromise(
