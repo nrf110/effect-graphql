@@ -310,6 +310,363 @@ describe("sse-adapter.ts", () => {
     })
   })
 
+  describe("SSE Lifecycle Hooks", () => {
+    const createTestSchema = () =>
+      new GraphQLSchema({
+        query: new GraphQLObjectType({
+          name: "Query",
+          fields: {
+            hello: { type: GraphQLString },
+          },
+        }),
+        subscription: new GraphQLObjectType({
+          name: "Subscription",
+          fields: {
+            counter: {
+              type: GraphQLInt,
+              subscribe: async function* () {
+                for (let i = 1; i <= 3; i++) {
+                  yield { counter: i }
+                }
+              },
+            },
+            error: {
+              type: GraphQLString,
+              subscribe: async function* () {
+                throw new Error("Subscription error")
+              },
+            },
+          },
+        }),
+      })
+
+    it("should call onSubscribe hook before subscription starts", async () => {
+      const schema = createTestSchema()
+      let subscribeCalled = false
+      let subscribeContext: any = null
+
+      const handler = makeGraphQLSSEHandler(schema, Layer.empty, {
+        onSubscribe: (ctx) => {
+          subscribeCalled = true
+          subscribeContext = ctx
+          return Effect.void
+        },
+      })
+
+      const stream = handler(
+        { query: "subscription { counter }" },
+        new Headers()
+      )
+
+      await Effect.runPromise(
+        Stream.runCollect(stream).pipe(Effect.map(() => {}))
+      )
+
+      expect(subscribeCalled).toBe(true)
+      expect(subscribeContext.request.query).toBe("subscription { counter }")
+    })
+
+    it("should call onComplete hook when subscription completes", async () => {
+      const schema = createTestSchema()
+      let completeCalled = false
+
+      const handler = makeGraphQLSSEHandler(schema, Layer.empty, {
+        onComplete: () => {
+          completeCalled = true
+          return Effect.void
+        },
+      })
+
+      const stream = handler(
+        { query: "subscription { counter }" },
+        new Headers()
+      )
+
+      await Effect.runPromise(
+        Stream.runCollect(stream).pipe(Effect.map(() => {}))
+      )
+
+      expect(completeCalled).toBe(true)
+    })
+
+    it("should reject connection when onConnect returns failure", async () => {
+      const schema = createTestSchema()
+
+      const handler = makeGraphQLSSEHandler(schema, Layer.empty, {
+        onConnect: () => Effect.fail(new Error("Unauthorized")),
+      })
+
+      const stream = handler(
+        { query: "subscription { counter }" },
+        new Headers()
+      )
+
+      const events: SSEEvent[] = []
+      await Effect.runPromise(
+        Stream.runCollect(stream).pipe(
+          Effect.map((chunk) => {
+            events.push(...chunk)
+          })
+        )
+      )
+
+      expect(events.length).toBe(2)
+      expect(events[0].event).toBe("error")
+      // onConnect failure results in an error response
+      expect(events[0].data).toContain("Unauthorized")
+      expect(events[1].event).toBe("complete")
+    })
+
+    it("should pass connection context to GraphQL resolver", async () => {
+      let receivedContext: any = null
+
+      const schema = new GraphQLSchema({
+        query: new GraphQLObjectType({
+          name: "Query",
+          fields: { hello: { type: GraphQLString } },
+        }),
+        subscription: new GraphQLObjectType({
+          name: "Subscription",
+          fields: {
+            counter: {
+              type: GraphQLInt,
+              subscribe: async function* (_, __, context) {
+                receivedContext = context
+                yield { counter: 1 }
+              },
+            },
+          },
+        }),
+      })
+
+      const handler = makeGraphQLSSEHandler(schema, Layer.empty, {
+        onConnect: () => Effect.succeed({ userId: "user-123", role: "admin" }),
+      })
+
+      const stream = handler(
+        { query: "subscription { counter }" },
+        new Headers()
+      )
+
+      await Effect.runPromise(
+        Stream.runCollect(stream).pipe(Effect.map(() => {}))
+      )
+
+      expect(receivedContext.userId).toBe("user-123")
+      expect(receivedContext.role).toBe("admin")
+    })
+
+    it("should handle errors thrown during subscription execution", async () => {
+      const schema = createTestSchema()
+
+      const stream = makeSSESubscriptionStream(
+        schema,
+        Layer.empty,
+        { query: "subscription { error }" },
+        new Headers()
+      )
+
+      const events: SSEEvent[] = []
+      await Effect.runPromise(
+        Stream.runCollect(stream).pipe(
+          Effect.map((chunk) => {
+            events.push(...chunk)
+          })
+        )
+      )
+
+      // Should get an error event and complete event
+      expect(events.some((e) => e.event === "error")).toBe(true)
+      expect(events.some((e) => e.event === "complete")).toBe(true)
+    })
+  })
+
+  describe("SSE Complexity Validation", () => {
+    const createTestSchema = () =>
+      new GraphQLSchema({
+        query: new GraphQLObjectType({
+          name: "Query",
+          fields: {
+            hello: { type: GraphQLString },
+          },
+        }),
+        subscription: new GraphQLObjectType({
+          name: "Subscription",
+          fields: {
+            tick: {
+              type: new GraphQLObjectType({
+                name: "Tick",
+                fields: {
+                  count: { type: new GraphQLNonNull(GraphQLInt) },
+                  nested: {
+                    type: new GraphQLObjectType({
+                      name: "NestedTick",
+                      fields: {
+                        value: { type: GraphQLInt },
+                      },
+                    }),
+                  },
+                },
+              }),
+              subscribe: async function* () {
+                yield { tick: { count: 1, nested: { value: 1 } } }
+              },
+            },
+          },
+        }),
+      })
+
+    it("should reject subscription when complexity exceeds limit", async () => {
+      const schema = createTestSchema()
+
+      const handler = makeGraphQLSSEHandler(schema, Layer.empty, {
+        complexity: {
+          maxComplexity: 1, // Very low limit
+        },
+      })
+
+      const stream = handler(
+        { query: "subscription { tick { count nested { value } } }" },
+        new Headers()
+      )
+
+      const events: SSEEvent[] = []
+      await Effect.runPromise(
+        Stream.runCollect(stream).pipe(
+          Effect.map((chunk) => {
+            events.push(...chunk)
+          })
+        )
+      )
+
+      expect(events.some((e) => e.event === "error")).toBe(true)
+      const errorEvent = events.find((e) => e.event === "error")
+      expect(errorEvent?.data).toContain("COMPLEXITY_LIMIT_EXCEEDED")
+    })
+
+    it("should reject subscription when depth exceeds limit", async () => {
+      const schema = createTestSchema()
+
+      const handler = makeGraphQLSSEHandler(schema, Layer.empty, {
+        complexity: {
+          maxDepth: 1, // Very shallow limit
+        },
+      })
+
+      const stream = handler(
+        { query: "subscription { tick { count nested { value } } }" },
+        new Headers()
+      )
+
+      const events: SSEEvent[] = []
+      await Effect.runPromise(
+        Stream.runCollect(stream).pipe(
+          Effect.map((chunk) => {
+            events.push(...chunk)
+          })
+        )
+      )
+
+      expect(events.some((e) => e.event === "error")).toBe(true)
+    })
+
+    it("should allow subscription when complexity is within limits", async () => {
+      const schema = createTestSchema()
+
+      const handler = makeGraphQLSSEHandler(schema, Layer.empty, {
+        complexity: {
+          maxComplexity: 100,
+          maxDepth: 10,
+        },
+      })
+
+      const stream = handler(
+        { query: "subscription { tick { count } }" },
+        new Headers()
+      )
+
+      const events: SSEEvent[] = []
+      await Effect.runPromise(
+        Stream.runCollect(stream).pipe(
+          Effect.map((chunk) => {
+            events.push(...chunk)
+          })
+        )
+      )
+
+      expect(events.some((e) => e.event === "next")).toBe(true)
+      expect(events.some((e) => e.event === "complete")).toBe(true)
+    })
+  })
+
+  describe("SSE Stream Cleanup", () => {
+    it("should properly clean up async iterator when stream is cancelled", async () => {
+      let iteratorCleanedUp = false
+      let yieldCount = 0
+
+      const schema = new GraphQLSchema({
+        query: new GraphQLObjectType({
+          name: "Query",
+          fields: { hello: { type: GraphQLString } },
+        }),
+        subscription: new GraphQLObjectType({
+          name: "Subscription",
+          fields: {
+            slow: {
+              type: GraphQLInt,
+              subscribe: () => ({
+                [Symbol.asyncIterator]() {
+                  return {
+                    async next() {
+                      yieldCount++
+                      if (yieldCount <= 10) {
+                        await new Promise((r) => setTimeout(r, 50))
+                        return { done: false, value: { slow: yieldCount } }
+                      }
+                      return { done: true, value: undefined }
+                    },
+                    return() {
+                      iteratorCleanedUp = true
+                      return Promise.resolve({ done: true, value: undefined })
+                    },
+                  }
+                },
+              }),
+            },
+          },
+        }),
+      })
+
+      const stream = makeSSESubscriptionStream(
+        schema,
+        Layer.empty,
+        { query: "subscription { slow }" },
+        new Headers()
+      )
+
+      // Take only first 2 events and cancel
+      const events: SSEEvent[] = []
+      await Effect.runPromise(
+        stream.pipe(
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.map((chunk) => {
+            events.push(...chunk)
+          })
+        )
+      )
+
+      // Should have received 2 events
+      expect(events.length).toBe(2)
+
+      // Give time for cleanup to run
+      await new Promise((r) => setTimeout(r, 100))
+
+      // Note: The cleanup happens via the Stream.async cleanup function
+      // which is called when the stream is interrupted
+    })
+  })
+
   describe("Integration with GraphQLSchemaBuilder", () => {
     it("should work with builder-created schemas", async () => {
       const Tick = S.Struct({

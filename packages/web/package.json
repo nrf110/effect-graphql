@@ -17,7 +17,10 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:unit": "vitest run test/unit",
+    "test:watch": "vitest"
   },
   "peerDependencies": {
     "@effect-gql/core": "^0.1.0",
@@ -27,7 +30,8 @@
   "devDependencies": {
     "@effect-gql/core": "*",
     "@effect/platform": "^0.94.0",
-    "effect": "^3.19.13"
+    "effect": "^3.19.13",
+    "graphql": "^16.0.0"
   },
   "keywords": [
     "effect",

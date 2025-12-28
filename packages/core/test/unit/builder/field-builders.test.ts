@@ -840,4 +840,188 @@ describe("field-builders.ts", () => {
       expect(capturedParent).toEqual({ name: "Alice" })
     })
   })
+
+  // ==========================================================================
+  // Middleware Edge Cases
+  // ==========================================================================
+  describe("Middleware Edge Cases", () => {
+    it("should propagate errors thrown by middleware", async () => {
+      const ctx = createFieldBuilderContext()
+
+      ctx.middlewares = [{
+        name: "errorMiddleware",
+        apply: <A, E, R2>(_effect: Effect.Effect<A, E, R2>) =>
+          Effect.fail(new Error("Middleware error")) as unknown as Effect.Effect<A, E, R2>,
+      }]
+
+      const config = buildField(
+        {
+          type: S.String,
+          resolve: () => Effect.succeed("value"),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const mockInfo = { fieldName: "test", parentType: { name: "Query" } } as any
+
+      await expect(config.resolve!(null, {}, testContext, mockInfo)).rejects.toThrow("Middleware error")
+    })
+
+    it("should handle Effect-based middleware operations", async () => {
+      const ctx = createFieldBuilderContext()
+      const operationOrder: string[] = []
+
+      ctx.middlewares = [{
+        name: "loggingMiddleware",
+        apply: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          Effect.gen(function* () {
+            operationOrder.push("before")
+            const result = yield* effect
+            operationOrder.push("after")
+            return result
+          }) as Effect.Effect<A, E, R>,
+      }]
+
+      const config = buildField(
+        {
+          type: S.String,
+          resolve: () =>
+            Effect.sync(() => {
+              operationOrder.push("resolve")
+              return "value"
+            }),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const mockInfo = { fieldName: "test", parentType: { name: "Query" } } as any
+      const result = await config.resolve!(null, {}, testContext, mockInfo)
+
+      expect(result).toBe("value")
+      expect(operationOrder).toEqual(["before", "resolve", "after"])
+    })
+
+    it("should short-circuit when middleware returns early", async () => {
+      const ctx = createFieldBuilderContext()
+      let resolverEffectRan = false
+
+      ctx.middlewares = [{
+        name: "shortCircuit",
+        apply: <A, E, R>(_effect: Effect.Effect<A, E, R>) =>
+          Effect.succeed("cached" as unknown as A),
+      }]
+
+      const config = buildField(
+        {
+          type: S.String,
+          resolve: () =>
+            Effect.sync(() => {
+              resolverEffectRan = true
+              return "value"
+            }),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const mockInfo = { fieldName: "test", parentType: { name: "Query" } } as any
+      const result = await config.resolve!(null, {}, testContext, mockInfo)
+
+      expect(result).toBe("cached")
+      // The resolver Effect was not executed because middleware short-circuited
+      expect(resolverEffectRan).toBe(false)
+    })
+
+    it("should preserve error type through middleware chain", async () => {
+      const ctx = createFieldBuilderContext()
+
+      ctx.middlewares = [{
+        name: "passthrough",
+        apply: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
+      }]
+
+      const config = buildField(
+        {
+          type: S.String,
+          resolve: () => Effect.fail(new Error("Test error")),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const mockInfo = { fieldName: "test", parentType: { name: "Query" } } as any
+
+      await expect(config.resolve!(null, {}, testContext, mockInfo)).rejects.toThrow("Test error")
+    })
+
+    it("should handle middleware that recovers from errors", async () => {
+      const ctx = createFieldBuilderContext()
+
+      ctx.middlewares = [{
+        name: "fallbackMiddleware",
+        apply: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          Effect.catchAll(effect, () => Effect.succeed("fallback" as unknown as A)),
+      }]
+
+      const config = buildField(
+        {
+          type: S.String,
+          resolve: () => Effect.fail(new Error("Original error")),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const mockInfo = { fieldName: "test", parentType: { name: "Query" } } as any
+      const result = await config.resolve!(null, {}, testContext, mockInfo)
+
+      expect(result).toBe("fallback")
+    })
+
+    it("should apply match predicate for each middleware independently", async () => {
+      const ctx = createFieldBuilderContext()
+
+      ctx.middlewares = [
+        {
+          name: "queryOnly",
+          match: (info) => info.parentType.name === "Query",
+          apply: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            Effect.map(effect, (v) => `Q:${v}` as unknown as A),
+        },
+        {
+          name: "mutationOnly",
+          match: (info) => info.parentType.name === "Mutation",
+          apply: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            Effect.map(effect, (v) => `M:${v}` as unknown as A),
+        },
+      ]
+
+      const config = buildField(
+        {
+          type: S.String,
+          resolve: () => Effect.succeed("value"),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+
+      // Query context - only queryOnly middleware applies
+      const queryInfo = { fieldName: "test", parentType: { name: "Query" } } as any
+      const queryResult = await config.resolve!(null, {}, testContext, queryInfo)
+      expect(queryResult).toBe("Q:value")
+
+      // Mutation context - only mutationOnly middleware applies
+      const mutationInfo = { fieldName: "test", parentType: { name: "Mutation" } } as any
+      const mutationResult = await config.resolve!(null, {}, testContext, mutationInfo)
+      expect(mutationResult).toBe("M:value")
+
+      // Other context - no middleware applies
+      const otherInfo = { fieldName: "test", parentType: { name: "Subscription" } } as any
+      const otherResult = await config.resolve!(null, {}, testContext, otherInfo)
+      expect(otherResult).toBe("value")
+    })
+  })
 })
