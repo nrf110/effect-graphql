@@ -269,8 +269,161 @@ function isLeafType(
 }
 
 /**
- * Analyze a selection set and return the aggregated cache policy
+ * Context passed through the analysis functions
  */
+interface AnalysisContext {
+  schema: GraphQLSchema
+  fragments: Map<string, FragmentDefinitionNode>
+  cacheHints: CacheHintMap
+  defaultMaxAge: number
+  defaultScope: CacheControlScope
+}
+
+/**
+ * Mutable state for aggregating cache policies
+ */
+interface PolicyAccumulator {
+  minMaxAge: number | undefined
+  hasPrivate: boolean
+}
+
+/**
+ * Aggregate a field policy into the accumulator
+ */
+function aggregatePolicy(acc: PolicyAccumulator, policy: CachePolicy): void {
+  if (acc.minMaxAge === undefined) {
+    acc.minMaxAge = policy.maxAge
+  } else {
+    acc.minMaxAge = Math.min(acc.minMaxAge, policy.maxAge)
+  }
+  if (policy.scope === "PRIVATE") {
+    acc.hasPrivate = true
+  }
+}
+
+/**
+ * Analyze a fragment spread and return its cache policy
+ */
+function analyzeFragmentSpread(
+  fragmentName: string,
+  ctx: AnalysisContext,
+  parentMaxAge: number | undefined,
+  visitedFragments: Set<string>
+): CachePolicy | undefined {
+  // Prevent infinite loops with fragment cycles
+  if (visitedFragments.has(fragmentName)) {
+    return undefined
+  }
+
+  const fragment = ctx.fragments.get(fragmentName)
+  if (!fragment) {
+    return undefined
+  }
+
+  const fragmentType = ctx.schema.getType(fragment.typeCondition.name.value)
+  if (!(fragmentType instanceof GraphQLObjectType)) {
+    return undefined
+  }
+
+  const newVisited = new Set(visitedFragments)
+  newVisited.add(fragmentName)
+
+  return analyzeSelectionSet(
+    fragment.selectionSet,
+    fragmentType,
+    ctx,
+    parentMaxAge,
+    newVisited
+  )
+}
+
+/**
+ * Analyze an inline fragment and return its cache policy
+ */
+function analyzeInlineFragment(
+  selection: { typeCondition?: { name: { value: string } }; selectionSet: SelectionSetNode },
+  parentType: GraphQLObjectType,
+  ctx: AnalysisContext,
+  parentMaxAge: number | undefined,
+  visitedFragments: Set<string>
+): CachePolicy {
+  let targetType = parentType
+
+  if (selection.typeCondition) {
+    const conditionType = ctx.schema.getType(selection.typeCondition.name.value)
+    if (conditionType instanceof GraphQLObjectType) {
+      targetType = conditionType
+    }
+  }
+
+  return analyzeSelectionSet(
+    selection.selectionSet,
+    targetType,
+    ctx,
+    parentMaxAge,
+    visitedFragments
+  )
+}
+
+/**
+ * Look up the effective cache hint for a field (field-level > type-level > undefined)
+ */
+function lookupEffectiveCacheHint(
+  parentTypeName: string,
+  fieldName: string,
+  returnType: GraphQLOutputType,
+  cacheHints: CacheHintMap
+): CacheHint | undefined {
+  // Priority: field-level hint > type-level hint
+  const fieldKey = `${parentTypeName}.${fieldName}`
+  const fieldHint = cacheHints.get(fieldKey)
+  if (fieldHint) return fieldHint
+
+  // Check type-level hint on return type
+  const namedType = getNamedType(returnType)
+  return namedType ? cacheHints.get(namedType.name) : undefined
+}
+
+/**
+ * Compute the maxAge for a field based on hint, inheritance, and field type
+ */
+function computeFieldMaxAge(
+  hint: CacheHint | undefined,
+  fieldType: GraphQLOutputType,
+  parentMaxAge: number | undefined,
+  defaultMaxAge: number
+): number {
+  if (hint) {
+    // Use explicit hint
+    if (hint.inheritMaxAge && parentMaxAge !== undefined) {
+      return parentMaxAge
+    }
+    if (hint.maxAge !== undefined) {
+      return hint.maxAge
+    }
+    // Fall through to default logic
+  }
+
+  // Scalar/enum fields inherit parent maxAge by default
+  if (isLeafType(fieldType) && parentMaxAge !== undefined) {
+    return parentMaxAge
+  }
+
+  // Root and object fields default to defaultMaxAge (typically 0)
+  return defaultMaxAge
+}
+
+/**
+ * Analyze a selection set and return the aggregated cache policy.
+ * Overload with AnalysisContext for internal use.
+ */
+function analyzeSelectionSet(
+  selectionSet: SelectionSetNode,
+  parentType: GraphQLObjectType,
+  ctx: AnalysisContext,
+  parentMaxAge: number | undefined,
+  visitedFragments: Set<string>
+): CachePolicy;
 function analyzeSelectionSet(
   selectionSet: SelectionSetNode,
   parentType: GraphQLObjectType,
@@ -281,109 +434,68 @@ function analyzeSelectionSet(
   defaultScope: CacheControlScope,
   parentMaxAge: number | undefined,
   visitedFragments: Set<string>
+): CachePolicy;
+function analyzeSelectionSet(
+  selectionSet: SelectionSetNode,
+  parentType: GraphQLObjectType,
+  schemaOrCtx: GraphQLSchema | AnalysisContext,
+  fragmentsOrParentMaxAge: Map<string, FragmentDefinitionNode> | number | undefined,
+  cacheHintsOrVisited?: CacheHintMap | Set<string>,
+  defaultMaxAge?: number,
+  defaultScope?: CacheControlScope,
+  parentMaxAge?: number | undefined,
+  visitedFragments?: Set<string>
 ): CachePolicy {
-  let minMaxAge: number | undefined = undefined
-  let hasPrivate = false
+  // Normalize arguments - support both old and new signatures
+  let ctx: AnalysisContext
+  let actualParentMaxAge: number | undefined
+  let actualVisitedFragments: Set<string>
+
+  if (schemaOrCtx instanceof GraphQLSchema) {
+    // Old signature
+    ctx = {
+      schema: schemaOrCtx,
+      fragments: fragmentsOrParentMaxAge as Map<string, FragmentDefinitionNode>,
+      cacheHints: cacheHintsOrVisited as CacheHintMap,
+      defaultMaxAge: defaultMaxAge!,
+      defaultScope: defaultScope!,
+    }
+    actualParentMaxAge = parentMaxAge
+    actualVisitedFragments = visitedFragments!
+  } else {
+    // New signature with AnalysisContext
+    ctx = schemaOrCtx
+    actualParentMaxAge = fragmentsOrParentMaxAge as number | undefined
+    actualVisitedFragments = cacheHintsOrVisited as Set<string>
+  }
+
+  const acc: PolicyAccumulator = { minMaxAge: undefined, hasPrivate: false }
 
   for (const selection of selectionSet.selections) {
     let fieldPolicy: CachePolicy | undefined
 
     switch (selection.kind) {
-      case Kind.FIELD: {
-        fieldPolicy = analyzeField(
-          selection,
-          parentType,
-          schema,
-          fragments,
-          cacheHints,
-          defaultMaxAge,
-          defaultScope,
-          parentMaxAge,
-          visitedFragments
-        )
+      case Kind.FIELD:
+        fieldPolicy = analyzeField(selection, parentType, ctx, actualParentMaxAge, actualVisitedFragments)
         break
-      }
 
-      case Kind.FRAGMENT_SPREAD: {
-        const fragmentName = selection.name.value
-
-        // Prevent infinite loops with fragment cycles
-        if (visitedFragments.has(fragmentName)) {
-          continue
-        }
-
-        const fragment = fragments.get(fragmentName)
-        if (!fragment) {
-          continue
-        }
-
-        const fragmentType = schema.getType(fragment.typeCondition.name.value)
-        if (!(fragmentType instanceof GraphQLObjectType)) {
-          continue
-        }
-
-        const newVisited = new Set(visitedFragments)
-        newVisited.add(fragmentName)
-
-        fieldPolicy = analyzeSelectionSet(
-          fragment.selectionSet,
-          fragmentType,
-          schema,
-          fragments,
-          cacheHints,
-          defaultMaxAge,
-          defaultScope,
-          parentMaxAge,
-          newVisited
-        )
+      case Kind.FRAGMENT_SPREAD:
+        fieldPolicy = analyzeFragmentSpread(selection.name.value, ctx, actualParentMaxAge, actualVisitedFragments)
         break
-      }
 
-      case Kind.INLINE_FRAGMENT: {
-        let targetType = parentType
-
-        if (selection.typeCondition) {
-          const conditionType = schema.getType(
-            selection.typeCondition.name.value
-          )
-          if (conditionType instanceof GraphQLObjectType) {
-            targetType = conditionType
-          }
-        }
-
-        fieldPolicy = analyzeSelectionSet(
-          selection.selectionSet,
-          targetType,
-          schema,
-          fragments,
-          cacheHints,
-          defaultMaxAge,
-          defaultScope,
-          parentMaxAge,
-          visitedFragments
-        )
+      case Kind.INLINE_FRAGMENT:
+        fieldPolicy = analyzeInlineFragment(selection, parentType, ctx, actualParentMaxAge, actualVisitedFragments)
         break
-      }
     }
 
     if (fieldPolicy) {
-      // Take minimum maxAge
-      if (minMaxAge === undefined) {
-        minMaxAge = fieldPolicy.maxAge
-      } else {
-        minMaxAge = Math.min(minMaxAge, fieldPolicy.maxAge)
-      }
-
-      // Any PRIVATE makes entire response PRIVATE
-      if (fieldPolicy.scope === "PRIVATE") {
-        hasPrivate = true
-      }
+      aggregatePolicy(acc, fieldPolicy)
     }
   }
 
   return {
-    maxAge: minMaxAge ?? defaultMaxAge,
-    scope: hasPrivate ? "PRIVATE" : defaultScope,
+    maxAge: acc.minMaxAge ?? ctx.defaultMaxAge,
+    scope: acc.hasPrivate ? "PRIVATE" : ctx.defaultScope,
   }
 }
 
@@ -393,11 +505,7 @@ function analyzeSelectionSet(
 function analyzeField(
   field: FieldNode,
   parentType: GraphQLObjectType,
-  schema: GraphQLSchema,
-  fragments: Map<string, FragmentDefinitionNode>,
-  cacheHints: CacheHintMap,
-  defaultMaxAge: number,
-  defaultScope: CacheControlScope,
+  ctx: AnalysisContext,
   parentMaxAge: number | undefined,
   visitedFragments: Set<string>
 ): CachePolicy {
@@ -411,73 +519,35 @@ function analyzeField(
   // Get the field from the schema
   const schemaField = parentType.getFields()[fieldName]
   if (!schemaField) {
-    // Field not found - use defaults
-    return { maxAge: defaultMaxAge, scope: defaultScope }
+    return { maxAge: ctx.defaultMaxAge, scope: ctx.defaultScope }
   }
 
-  // Look up cache hints
-  // Priority: field-level hint > type-level hint > defaults
-  const fieldKey = `${parentType.name}.${fieldName}`
-  const fieldHint = cacheHints.get(fieldKey)
+  // Look up effective cache hint
+  const effectiveHint = lookupEffectiveCacheHint(
+    parentType.name,
+    fieldName,
+    schemaField.type,
+    ctx.cacheHints
+  )
 
-  // Get the return type for type-level hints
-  const namedType = getNamedType(schemaField.type)
-  const typeHint = namedType ? cacheHints.get(namedType.name) : undefined
-
-  // Determine the effective cache hint for this field
-  const effectiveHint = fieldHint ?? typeHint
-
-  let fieldMaxAge: number
-  let fieldScope: CacheControlScope = defaultScope
-
-  if (effectiveHint) {
-    // Use explicit hint
-    if (effectiveHint.inheritMaxAge && parentMaxAge !== undefined) {
-      fieldMaxAge = parentMaxAge
-    } else if (effectiveHint.maxAge !== undefined) {
-      fieldMaxAge = effectiveHint.maxAge
-    } else if (isLeafType(schemaField.type) && parentMaxAge !== undefined) {
-      // Scalar/enum fields inherit parent maxAge by default
-      fieldMaxAge = parentMaxAge
-    } else {
-      // Object fields default to 0
-      fieldMaxAge = defaultMaxAge
-    }
-
-    if (effectiveHint.scope) {
-      fieldScope = effectiveHint.scope
-    }
-  } else {
-    // No explicit hint - use defaults
-    if (isLeafType(schemaField.type) && parentMaxAge !== undefined) {
-      // Scalar/enum fields inherit parent maxAge
-      fieldMaxAge = parentMaxAge
-    } else {
-      // Root and object fields default to 0
-      fieldMaxAge = defaultMaxAge
-    }
-  }
+  // Compute field maxAge
+  const fieldMaxAge = computeFieldMaxAge(effectiveHint, schemaField.type, parentMaxAge, ctx.defaultMaxAge)
+  const fieldScope: CacheControlScope = effectiveHint?.scope ?? ctx.defaultScope
 
   // If the field has a selection set, analyze it
+  const namedType = getNamedType(schemaField.type)
   if (field.selectionSet && namedType instanceof GraphQLObjectType) {
     const nestedPolicy = analyzeSelectionSet(
       field.selectionSet,
       namedType,
-      schema,
-      fragments,
-      cacheHints,
-      defaultMaxAge,
-      defaultScope,
-      fieldMaxAge, // Pass this field's maxAge as parent for inheritance
+      ctx,
+      fieldMaxAge,
       visitedFragments
     )
 
-    // Take minimum of this field and nested fields
     return {
       maxAge: Math.min(fieldMaxAge, nestedPolicy.maxAge),
-      scope: fieldScope === "PRIVATE" || nestedPolicy.scope === "PRIVATE"
-        ? "PRIVATE"
-        : "PUBLIC",
+      scope: fieldScope === "PRIVATE" || nestedPolicy.scope === "PRIVATE" ? "PRIVATE" : "PUBLIC",
     }
   }
 

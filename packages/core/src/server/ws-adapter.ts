@@ -25,6 +25,259 @@ interface WSExtra<R> {
 }
 
 /**
+ * Create a ConnectionContext from WSExtra for use in lifecycle hooks.
+ */
+const createConnectionContext = <R>(extra: WSExtra<R>): ConnectionContext<R> => ({
+  runtime: extra.runtime,
+  connectionParams: extra.connectionParams,
+  socket: extra.socket,
+})
+
+/**
+ * Create the onConnect handler for graphql-ws.
+ */
+const makeOnConnectHandler = <R>(
+  options: GraphQLWSOptions<R> | undefined
+): ServerOptions<Record<string, unknown>, WSExtra<R>>["onConnect"] => {
+  if (!options?.onConnect) return undefined
+
+  return async (ctx) => {
+    const extra = ctx.extra as WSExtra<R>
+    try {
+      const result = await Runtime.runPromise(extra.runtime)(
+        options.onConnect!(ctx.connectionParams ?? {})
+      )
+      if (typeof result === "object" && result !== null) {
+        Object.assign(extra.connectionParams, result)
+      }
+      return result !== false
+    } catch {
+      return false
+    }
+  }
+}
+
+/**
+ * Create the onDisconnect handler for graphql-ws.
+ */
+const makeOnDisconnectHandler = <R>(
+  options: GraphQLWSOptions<R> | undefined
+): ServerOptions<Record<string, unknown>, WSExtra<R>>["onDisconnect"] => {
+  if (!options?.onDisconnect) return undefined
+
+  return async (ctx) => {
+    const extra = ctx.extra as WSExtra<R>
+    await Runtime.runPromise(extra.runtime)(
+      options.onDisconnect!(createConnectionContext(extra))
+    ).catch(() => {
+      // Ignore cleanup errors
+    })
+  }
+}
+
+/**
+ * Create the onSubscribe handler for graphql-ws with complexity validation.
+ */
+const makeOnSubscribeHandler = <R>(
+  options: GraphQLWSOptions<R> | undefined,
+  schema: GraphQLSchema,
+  complexityConfig: GraphQLWSOptions<R>["complexity"],
+  fieldComplexities: FieldComplexityMap
+): ServerOptions<Record<string, unknown>, WSExtra<R>>["onSubscribe"] => {
+  // graphql-ws 6.0: signature changed from (ctx, msg) to (ctx, id, payload)
+  return async (ctx, id, payload) => {
+    const extra = ctx.extra as WSExtra<R>
+    const connectionCtx = createConnectionContext(extra)
+
+    // Validate complexity if configured
+    if (complexityConfig) {
+      const validationEffect = validateComplexity(
+        payload.query,
+        payload.operationName ?? undefined,
+        payload.variables ?? undefined,
+        schema,
+        fieldComplexities,
+        complexityConfig
+      ).pipe(
+        Effect.catchAll((error) => {
+          if (error._tag === "ComplexityLimitExceededError") {
+            throw new GraphQLError(error.message, {
+              extensions: {
+                code: "COMPLEXITY_LIMIT_EXCEEDED",
+                limitType: error.limitType,
+                limit: error.limit,
+                actual: error.actual,
+              },
+            })
+          }
+          return Effect.logWarning("Complexity analysis failed for subscription", error)
+        })
+      )
+
+      await Effect.runPromise(validationEffect)
+    }
+
+    // Call user's onSubscribe hook if provided
+    if (options?.onSubscribe) {
+      await Runtime.runPromise(extra.runtime)(
+        options.onSubscribe(connectionCtx, {
+          id,
+          payload: {
+            query: payload.query,
+            variables: payload.variables ?? undefined,
+            operationName: payload.operationName ?? undefined,
+            extensions: payload.extensions ?? undefined,
+          },
+        })
+      )
+    }
+  }
+}
+
+/**
+ * Create the onComplete handler for graphql-ws.
+ */
+const makeOnCompleteHandler = <R>(
+  options: GraphQLWSOptions<R> | undefined
+): ServerOptions<Record<string, unknown>, WSExtra<R>>["onComplete"] => {
+  if (!options?.onComplete) return undefined
+
+  // graphql-ws 6.0: signature changed from (ctx, msg) to (ctx, id, payload)
+  return async (ctx, id, _payload) => {
+    const extra = ctx.extra as WSExtra<R>
+    await Runtime.runPromise(extra.runtime)(
+      options.onComplete!(createConnectionContext(extra), { id })
+    ).catch(() => {
+      // Ignore cleanup errors
+    })
+  }
+}
+
+/**
+ * Create the onError handler for graphql-ws.
+ */
+const makeOnErrorHandler = <R>(
+  options: GraphQLWSOptions<R> | undefined
+): ServerOptions<Record<string, unknown>, WSExtra<R>>["onError"] => {
+  if (!options?.onError) return undefined
+
+  // graphql-ws 6.0: signature changed from (ctx, msg, errors) to (ctx, id, payload, errors)
+  return async (ctx, _id, _payload, errors) => {
+    const extra = ctx.extra as WSExtra<R>
+    await Runtime.runPromise(extra.runtime)(
+      options.onError!(createConnectionContext(extra), errors)
+    ).catch(() => {
+      // Ignore error handler errors
+    })
+  }
+}
+
+/**
+ * Create a graphql-ws compatible socket adapter from an EffectWebSocket.
+ */
+const createGraphqlWsSocketAdapter = <R>(
+  socket: EffectWebSocket,
+  runtime: Runtime.Runtime<R>
+) => {
+  let messageCallback: ((message: string) => Promise<void>) | null = null
+
+  return {
+    adapter: {
+      protocol: socket.protocol,
+
+      send: (data: string) =>
+        Runtime.runPromise(runtime)(
+          socket.send(data).pipe(
+            Effect.catchAll((error) => Effect.logError("WebSocket send error", error))
+          )
+        ),
+
+      close: (code?: number, reason?: string) => {
+        Runtime.runPromise(runtime)(socket.close(code, reason)).catch(() => {
+          // Ignore close errors
+        })
+      },
+
+      onMessage: (cb: (message: string) => Promise<void>) => {
+        messageCallback = cb
+      },
+
+      onPong: (_payload: Record<string, unknown> | undefined) => {
+        // Pong handling - can be used for keepalive
+      },
+    },
+    dispatchMessage: async (message: string) => {
+      if (messageCallback) {
+        await messageCallback(message)
+      }
+    },
+  }
+}
+
+/**
+ * Run the connection lifecycle - manages message queue, fibers, and cleanup.
+ */
+const runConnectionLifecycle = <R>(
+  socket: EffectWebSocket,
+  wsServer: ReturnType<typeof makeServer<Record<string, unknown>, WSExtra<R>>>,
+  extra: WSExtra<R>
+): Effect.Effect<void, never, never> =>
+  Effect.gen(function* () {
+    // Create message queue for bridging Stream to callback
+    const messageQueue = yield* Queue.unbounded<string>()
+    const closedDeferred = yield* Deferred.make<CloseEvent, WebSocketError>()
+
+    // Fork fiber to consume socket messages and push to queue
+    const messageFiber = yield* Effect.fork(
+      Stream.runForEach(socket.messages, (msg) => Queue.offer(messageQueue, msg)).pipe(
+        Effect.catchAll((error) => Deferred.fail(closedDeferred, error))
+      )
+    )
+
+    // Fork fiber to handle socket close
+    const closeFiber = yield* Effect.fork(
+      socket.closed.pipe(
+        Effect.tap((event) => Deferred.succeed(closedDeferred, event)),
+        Effect.catchAll((error) => Deferred.fail(closedDeferred, error))
+      )
+    )
+
+    // Create the graphql-ws socket adapter
+    const { adapter, dispatchMessage } = createGraphqlWsSocketAdapter(socket, extra.runtime)
+
+    // Open the connection with graphql-ws
+    const closedHandler = wsServer.opened(adapter, extra)
+
+    // Fork fiber to process messages from queue
+    const processMessagesFiber = yield* Effect.fork(
+      Effect.gen(function* () {
+        while (true) {
+          const message = yield* Queue.take(messageQueue)
+          yield* Effect.tryPromise({
+            try: () => dispatchMessage(message),
+            catch: (error) => error,
+          }).pipe(Effect.catchAll(() => Effect.void))
+        }
+      })
+    )
+
+    // Wait for connection to close
+    yield* Deferred.await(closedDeferred).pipe(
+      Effect.catchAll(() => Effect.succeed({ code: 1000, reason: "Error" }))
+    )
+
+    // Cleanup
+    closedHandler(1000, "Connection closed")
+    yield* Fiber.interrupt(messageFiber)
+    yield* Fiber.interrupt(closeFiber)
+    yield* Fiber.interrupt(processMessagesFiber)
+    yield* Queue.shutdown(messageQueue)
+  }).pipe(
+    Effect.catchAllCause(() => Effect.void),
+    Effect.scoped
+  )
+
+/**
  * Create a WebSocket handler for GraphQL subscriptions using the graphql-ws protocol.
  *
  * This function creates a handler that can be used with any WebSocket implementation
@@ -63,15 +316,13 @@ export const makeGraphQLWSHandler = <R>(
   layer: Layer.Layer<R>,
   options?: GraphQLWSOptions<R>
 ): (socket: EffectWebSocket) => Effect.Effect<void, never, never> => {
-  // Extract complexity config
   const complexityConfig = options?.complexity
   const fieldComplexities: FieldComplexityMap = options?.fieldComplexities ?? new Map()
 
-  // Create the graphql-ws server options
+  // Build server options using extracted handler factories
   const serverOptions: ServerOptions<Record<string, unknown>, WSExtra<R>> = {
     schema,
 
-    // Context factory - called for each operation
     context: async (ctx): Promise<GraphQLEffectContext<R> & Record<string, unknown>> => {
       const extra = ctx.extra as WSExtra<R>
       return {
@@ -80,139 +331,13 @@ export const makeGraphQLWSHandler = <R>(
       }
     },
 
-    // Execute subscriptions
-    subscribe: async (args) => {
-      const result = await subscribe(args)
-      return result
-    },
+    subscribe: async (args) => subscribe(args),
 
-    // Connection init handler
-    onConnect: options?.onConnect
-      ? async (ctx) => {
-          const extra = ctx.extra as WSExtra<R>
-          try {
-            const result = await Runtime.runPromise(extra.runtime)(
-              options.onConnect!(ctx.connectionParams ?? {})
-            )
-            if (typeof result === "object" && result !== null) {
-              // Merge connection result into connectionParams for later use
-              Object.assign(extra.connectionParams, result)
-            }
-            return result !== false
-          } catch {
-            return false
-          }
-        }
-      : undefined,
-
-    // Disconnect handler
-    onDisconnect: options?.onDisconnect
-      ? async (ctx) => {
-          const extra = ctx.extra as WSExtra<R>
-          const connectionCtx: ConnectionContext<R> = {
-            runtime: extra.runtime,
-            connectionParams: extra.connectionParams,
-            socket: extra.socket,
-          }
-          await Runtime.runPromise(extra.runtime)(
-            options.onDisconnect!(connectionCtx)
-          ).catch(() => {
-            // Ignore cleanup errors
-          })
-        }
-      : undefined,
-
-    // Subscribe handler (per-subscription) - includes complexity validation
-    // graphql-ws 6.0: signature changed from (ctx, msg) to (ctx, id, payload)
-    onSubscribe: async (ctx, id, payload) => {
-      const extra = ctx.extra as WSExtra<R>
-      const connectionCtx: ConnectionContext<R> = {
-        runtime: extra.runtime,
-        connectionParams: extra.connectionParams,
-        socket: extra.socket,
-      }
-
-      // Validate complexity if configured
-      if (complexityConfig) {
-        const validationEffect = validateComplexity(
-          payload.query,
-          payload.operationName ?? undefined,
-          payload.variables ?? undefined,
-          schema,
-          fieldComplexities,
-          complexityConfig
-        ).pipe(
-          Effect.catchAll((error) => {
-            if (error._tag === "ComplexityLimitExceededError") {
-              // Convert to a GraphQL error that graphql-ws will send to client
-              throw new GraphQLError(error.message, {
-                extensions: {
-                  code: "COMPLEXITY_LIMIT_EXCEEDED",
-                  limitType: error.limitType,
-                  limit: error.limit,
-                  actual: error.actual,
-                },
-              })
-            }
-            // Log analysis errors but don't block (fail open)
-            return Effect.logWarning("Complexity analysis failed for subscription", error)
-          })
-        )
-
-        await Effect.runPromise(validationEffect)
-      }
-
-      // Call user's onSubscribe hook if provided
-      if (options?.onSubscribe) {
-        await Runtime.runPromise(extra.runtime)(
-          options.onSubscribe(connectionCtx, {
-            id,
-            payload: {
-              query: payload.query,
-              variables: payload.variables ?? undefined,
-              operationName: payload.operationName ?? undefined,
-              extensions: payload.extensions ?? undefined,
-            },
-          })
-        )
-      }
-    },
-
-    // Complete handler
-    // graphql-ws 6.0: signature changed from (ctx, msg) to (ctx, id, payload)
-    onComplete: options?.onComplete
-      ? async (ctx, id, _payload) => {
-          const extra = ctx.extra as WSExtra<R>
-          const connectionCtx: ConnectionContext<R> = {
-            runtime: extra.runtime,
-            connectionParams: extra.connectionParams,
-            socket: extra.socket,
-          }
-          await Runtime.runPromise(extra.runtime)(
-            options.onComplete!(connectionCtx, { id })
-          ).catch(() => {
-            // Ignore cleanup errors
-          })
-        }
-      : undefined,
-
-    // Error handler
-    // graphql-ws 6.0: signature changed from (ctx, msg, errors) to (ctx, id, payload, errors)
-    onError: options?.onError
-      ? async (ctx, _id, _payload, errors) => {
-          const extra = ctx.extra as WSExtra<R>
-          const connectionCtx: ConnectionContext<R> = {
-            runtime: extra.runtime,
-            connectionParams: extra.connectionParams,
-            socket: extra.socket,
-          }
-          await Runtime.runPromise(extra.runtime)(
-            options.onError!(connectionCtx, errors)
-          ).catch(() => {
-            // Ignore error handler errors
-          })
-        }
-      : undefined,
+    onConnect: makeOnConnectHandler(options),
+    onDisconnect: makeOnDisconnectHandler(options),
+    onSubscribe: makeOnSubscribeHandler(options, schema, complexityConfig, fieldComplexities),
+    onComplete: makeOnCompleteHandler(options),
+    onError: makeOnErrorHandler(options),
   }
 
   const wsServer = makeServer(serverOptions)
@@ -220,92 +345,15 @@ export const makeGraphQLWSHandler = <R>(
   // Return the connection handler
   return (socket: EffectWebSocket): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
-      // Create a runtime from the layer for this connection
       const runtime = yield* Effect.provide(Effect.runtime<R>(), layer)
 
-      // Extra context for this connection
       const extra: WSExtra<R> = {
         socket,
         runtime,
         connectionParams: {},
       }
 
-      // Create message queue for bridging Stream to callback
-      const messageQueue = yield* Queue.unbounded<string>()
-      const closedDeferred = yield* Deferred.make<CloseEvent, WebSocketError>()
-
-      // Fork a fiber to consume socket messages and push to queue
-      const messageFiber = yield* Effect.fork(
-        Stream.runForEach(socket.messages, (msg) => Queue.offer(messageQueue, msg)).pipe(
-          Effect.catchAll((error) => Deferred.fail(closedDeferred, error))
-        )
-      )
-
-      // Fork a fiber to handle socket close
-      const closeFiber = yield* Effect.fork(
-        socket.closed.pipe(
-          Effect.tap((event) => Deferred.succeed(closedDeferred, event)),
-          Effect.catchAll((error) => Deferred.fail(closedDeferred, error))
-        )
-      )
-
-      // Create the graphql-ws socket adapter
-      let messageCallback: ((message: string) => Promise<void>) | null = null
-
-      const graphqlWsSocket = {
-        protocol: socket.protocol,
-
-        send: (data: string) =>
-          Runtime.runPromise(runtime)(
-            socket.send(data).pipe(
-              Effect.catchAll((error) => Effect.logError("WebSocket send error", error))
-            )
-          ),
-
-        close: (code?: number, reason?: string) => {
-          Runtime.runPromise(runtime)(socket.close(code, reason)).catch(() => {
-            // Ignore close errors
-          })
-        },
-
-        onMessage: (cb: (message: string) => Promise<void>) => {
-          messageCallback = cb
-        },
-
-        onPong: (_payload: Record<string, unknown> | undefined) => {
-          // Pong handling - can be used for keepalive
-        },
-      }
-
-      // Open the connection with graphql-ws
-      const closedHandler = wsServer.opened(graphqlWsSocket, extra)
-
-      // Fork a fiber to process messages from queue
-      const processMessagesFiber = yield* Effect.fork(
-        Effect.gen(function* () {
-          while (true) {
-            const message = yield* Queue.take(messageQueue)
-            if (messageCallback) {
-              yield* Effect.tryPromise({
-                try: () => messageCallback!(message),
-                catch: (error) => error,
-              }).pipe(Effect.catchAll(() => Effect.void))
-            }
-          }
-        })
-      )
-
-      // Wait for connection to close
-      yield* Deferred.await(closedDeferred).pipe(
-        Effect.catchAll(() => Effect.succeed({ code: 1000, reason: "Error" }))
-      )
-
-      // Cleanup
-      closedHandler(1000, "Connection closed")
-      yield* Fiber.interrupt(messageFiber)
-      yield* Fiber.interrupt(closeFiber)
-      yield* Fiber.interrupt(processMessagesFiber)
-      yield* Queue.shutdown(messageQueue)
+      yield* runConnectionLifecycle(socket, wsServer, extra)
     }).pipe(
       Effect.catchAllCause(() => Effect.void),
       Effect.scoped
