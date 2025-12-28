@@ -1,6 +1,6 @@
-import { Effect, Layer, Runtime, Stream, Queue, Fiber, Option, Deferred, Scope } from "effect"
-import { GraphQLSchema, subscribe, ExecutionResult, GraphQLError } from "graphql"
-import { makeServer, type ServerOptions, type Context as WSContext } from "graphql-ws"
+import { Effect, Layer, Runtime, Stream, Queue, Fiber, Deferred } from "effect"
+import { GraphQLSchema, subscribe, GraphQLError } from "graphql"
+import { makeServer, type ServerOptions } from "graphql-ws"
 import type { GraphQLEffectContext } from "../builder/types"
 import type {
   EffectWebSocket,
@@ -11,7 +11,6 @@ import type {
 } from "./ws-types"
 import {
   validateComplexity,
-  ComplexityLimitExceededError,
   type FieldComplexityMap,
 } from "./complexity"
 
@@ -124,7 +123,8 @@ export const makeGraphQLWSHandler = <R>(
       : undefined,
 
     // Subscribe handler (per-subscription) - includes complexity validation
-    onSubscribe: async (ctx, msg) => {
+    // graphql-ws 6.0: signature changed from (ctx, msg) to (ctx, id, payload)
+    onSubscribe: async (ctx, id, payload) => {
       const extra = ctx.extra as WSExtra<R>
       const connectionCtx: ConnectionContext<R> = {
         runtime: extra.runtime,
@@ -135,9 +135,9 @@ export const makeGraphQLWSHandler = <R>(
       // Validate complexity if configured
       if (complexityConfig) {
         const validationEffect = validateComplexity(
-          msg.payload.query,
-          msg.payload.operationName ?? undefined,
-          msg.payload.variables ?? undefined,
+          payload.query,
+          payload.operationName ?? undefined,
+          payload.variables ?? undefined,
           schema,
           fieldComplexities,
           complexityConfig
@@ -166,12 +166,12 @@ export const makeGraphQLWSHandler = <R>(
       if (options?.onSubscribe) {
         await Runtime.runPromise(extra.runtime)(
           options.onSubscribe(connectionCtx, {
-            id: msg.id,
+            id,
             payload: {
-              query: msg.payload.query,
-              variables: msg.payload.variables ?? undefined,
-              operationName: msg.payload.operationName ?? undefined,
-              extensions: msg.payload.extensions ?? undefined,
+              query: payload.query,
+              variables: payload.variables ?? undefined,
+              operationName: payload.operationName ?? undefined,
+              extensions: payload.extensions ?? undefined,
             },
           })
         )
@@ -179,8 +179,9 @@ export const makeGraphQLWSHandler = <R>(
     },
 
     // Complete handler
+    // graphql-ws 6.0: signature changed from (ctx, msg) to (ctx, id, payload)
     onComplete: options?.onComplete
-      ? async (ctx, msg) => {
+      ? async (ctx, id, _payload) => {
           const extra = ctx.extra as WSExtra<R>
           const connectionCtx: ConnectionContext<R> = {
             runtime: extra.runtime,
@@ -188,7 +189,7 @@ export const makeGraphQLWSHandler = <R>(
             socket: extra.socket,
           }
           await Runtime.runPromise(extra.runtime)(
-            options.onComplete!(connectionCtx, { id: msg.id })
+            options.onComplete!(connectionCtx, { id })
           ).catch(() => {
             // Ignore cleanup errors
           })
@@ -196,8 +197,9 @@ export const makeGraphQLWSHandler = <R>(
       : undefined,
 
     // Error handler
+    // graphql-ws 6.0: signature changed from (ctx, msg, errors) to (ctx, id, payload, errors)
     onError: options?.onError
-      ? async (ctx, _msg, errors) => {
+      ? async (ctx, _id, _payload, errors) => {
           const extra = ctx.extra as WSExtra<R>
           const connectionCtx: ConnectionContext<R> = {
             runtime: extra.runtime,
@@ -308,15 +310,4 @@ export const makeGraphQLWSHandler = <R>(
       Effect.catchAllCause(() => Effect.void),
       Effect.scoped
     )
-}
-
-/**
- * Type guard to check if a value is an AsyncIterator (subscription result)
- */
-function isAsyncIterable<T>(value: unknown): value is AsyncIterable<T> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    Symbol.asyncIterator in value
-  )
 }
