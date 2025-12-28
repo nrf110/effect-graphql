@@ -25,6 +25,7 @@ export {
   GraphQLBoolean,
   GraphQLID,
   printSchema,
+  lexicographicSortSchema,
   graphql,
   Kind,
 } from 'graphql'

@@ -1,0 +1,45 @@
+{
+  "name": "@effect-gql/cli",
+  "version": "0.1.0",
+  "description": "CLI tools for Effect GraphQL development",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "effect-gql": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "@effect-gql/core": "^0.1.0",
+    "effect": "^3.19.0",
+    "graphql": "^16.0.0"
+  },
+  "devDependencies": {
+    "@effect-gql/core": "*",
+    "effect": "^3.19.13",
+    "graphql": "^16.0.0"
+  },
+  "keywords": [
+    "effect",
+    "graphql",
+    "cli",
+    "schema",
+    "codegen"
+  ],
+  "license": "MIT"
+}
