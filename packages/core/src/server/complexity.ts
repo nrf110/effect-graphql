@@ -9,7 +9,6 @@ import {
   SelectionSetNode,
   GraphQLSchema,
   GraphQLObjectType,
-  GraphQLField,
   GraphQLOutputType,
   GraphQLNonNull,
   GraphQLList,
@@ -258,6 +257,30 @@ function getNamedType(type: GraphQLOutputType): GraphQLObjectType | null {
 }
 
 /**
+ * Merge a child result into an accumulator (mutates accumulator)
+ */
+function accumulateResult(
+  acc: { maxDepth: number; complexity: number; fieldCount: number; aliasCount: number },
+  result: ComplexityResult
+): void {
+  acc.maxDepth = Math.max(acc.maxDepth, result.depth)
+  acc.complexity += result.complexity
+  acc.fieldCount += result.fieldCount
+  acc.aliasCount += result.aliasCount
+}
+
+/**
+ * Analysis context passed through the recursive analysis functions
+ */
+interface AnalysisContext {
+  readonly schema: GraphQLSchema
+  readonly fragments: Map<string, FragmentDefinitionNode>
+  readonly fieldComplexities: FieldComplexityMap
+  readonly variables: Record<string, unknown>
+  readonly defaultCost: number
+}
+
+/**
  * Analyze a selection set and return complexity metrics
  */
 function analyzeSelectionSet(
@@ -271,73 +294,35 @@ function analyzeSelectionSet(
   currentDepth: number,
   visitedFragments: Set<string>
 ): ComplexityResult {
-  let maxDepth = currentDepth
-  let complexity = 0
-  let fieldCount = 0
-  let aliasCount = 0
+  const ctx: AnalysisContext = { schema, fragments, fieldComplexities, variables, defaultCost }
+  const acc = { maxDepth: currentDepth, complexity: 0, fieldCount: 0, aliasCount: 0 }
 
   for (const selection of selectionSet.selections) {
-    switch (selection.kind) {
-      case Kind.FIELD: {
-        const fieldResult = analyzeField(
-          selection,
-          parentType,
-          schema,
-          fragments,
-          fieldComplexities,
-          variables,
-          defaultCost,
-          currentDepth,
-          visitedFragments
-        )
-        maxDepth = Math.max(maxDepth, fieldResult.depth)
-        complexity += fieldResult.complexity
-        fieldCount += fieldResult.fieldCount
-        aliasCount += fieldResult.aliasCount
-        break
-      }
-
-      case Kind.FRAGMENT_SPREAD: {
-        const fragmentResult = analyzeFragmentSpread(
-          selection,
-          parentType,
-          schema,
-          fragments,
-          fieldComplexities,
-          variables,
-          defaultCost,
-          currentDepth,
-          visitedFragments
-        )
-        maxDepth = Math.max(maxDepth, fragmentResult.depth)
-        complexity += fragmentResult.complexity
-        fieldCount += fragmentResult.fieldCount
-        aliasCount += fragmentResult.aliasCount
-        break
-      }
-
-      case Kind.INLINE_FRAGMENT: {
-        const inlineResult = analyzeInlineFragment(
-          selection,
-          parentType,
-          schema,
-          fragments,
-          fieldComplexities,
-          variables,
-          defaultCost,
-          currentDepth,
-          visitedFragments
-        )
-        maxDepth = Math.max(maxDepth, inlineResult.depth)
-        complexity += inlineResult.complexity
-        fieldCount += inlineResult.fieldCount
-        aliasCount += inlineResult.aliasCount
-        break
-      }
-    }
+    const result = analyzeSelection(selection, parentType, ctx, currentDepth, visitedFragments)
+    accumulateResult(acc, result)
   }
 
-  return { depth: maxDepth, complexity, fieldCount, aliasCount }
+  return { depth: acc.maxDepth, complexity: acc.complexity, fieldCount: acc.fieldCount, aliasCount: acc.aliasCount }
+}
+
+/**
+ * Analyze a single selection node (field, fragment spread, or inline fragment)
+ */
+function analyzeSelection(
+  selection: FieldNode | FragmentSpreadNode | InlineFragmentNode,
+  parentType: GraphQLObjectType,
+  ctx: AnalysisContext,
+  currentDepth: number,
+  visitedFragments: Set<string>
+): ComplexityResult {
+  switch (selection.kind) {
+    case Kind.FIELD:
+      return analyzeField(selection, parentType, ctx, currentDepth, visitedFragments)
+    case Kind.FRAGMENT_SPREAD:
+      return analyzeFragmentSpread(selection, ctx, currentDepth, visitedFragments)
+    case Kind.INLINE_FRAGMENT:
+      return analyzeInlineFragment(selection, parentType, ctx, currentDepth, visitedFragments)
+  }
 }
 
 /**
@@ -346,11 +331,7 @@ function analyzeSelectionSet(
 function analyzeField(
   field: FieldNode,
   parentType: GraphQLObjectType,
-  schema: GraphQLSchema,
-  fragments: Map<string, FragmentDefinitionNode>,
-  fieldComplexities: FieldComplexityMap,
-  variables: Record<string, unknown>,
-  defaultCost: number,
+  ctx: AnalysisContext,
   currentDepth: number,
   visitedFragments: Set<string>
 ): ComplexityResult {
@@ -366,23 +347,18 @@ function analyzeField(
   const schemaField = parentType.getFields()[fieldName]
   if (!schemaField) {
     // Field not found - skip (will be caught by validation)
-    return { depth: currentDepth, complexity: defaultCost, fieldCount: 1, aliasCount }
+    return { depth: currentDepth, complexity: ctx.defaultCost, fieldCount: 1, aliasCount }
   }
 
   // Calculate field arguments
-  const args = resolveFieldArguments(field, variables)
+  const args = resolveFieldArguments(field, ctx.variables)
 
   // Get field complexity
   const complexityKey = `${parentType.name}.${fieldName}`
-  const fieldComplexity = fieldComplexities.get(complexityKey)
-  let cost: number
-  if (fieldComplexity !== undefined) {
-    cost = typeof fieldComplexity === "function"
-      ? fieldComplexity(args)
-      : fieldComplexity
-  } else {
-    cost = defaultCost
-  }
+  const fieldComplexity = ctx.fieldComplexities.get(complexityKey)
+  const cost = fieldComplexity !== undefined
+    ? (typeof fieldComplexity === "function" ? fieldComplexity(args) : fieldComplexity)
+    : ctx.defaultCost
 
   // If the field has a selection set, analyze it
   if (field.selectionSet) {
@@ -391,11 +367,11 @@ function analyzeField(
       const nestedResult = analyzeSelectionSet(
         field.selectionSet,
         fieldType,
-        schema,
-        fragments,
-        fieldComplexities,
-        variables,
-        defaultCost,
+        ctx.schema,
+        ctx.fragments,
+        ctx.fieldComplexities,
+        ctx.variables,
+        ctx.defaultCost,
         currentDepth + 1,
         visitedFragments
       )
@@ -416,12 +392,7 @@ function analyzeField(
  */
 function analyzeFragmentSpread(
   spread: FragmentSpreadNode,
-  _parentType: GraphQLObjectType,
-  schema: GraphQLSchema,
-  fragments: Map<string, FragmentDefinitionNode>,
-  fieldComplexities: FieldComplexityMap,
-  variables: Record<string, unknown>,
-  defaultCost: number,
+  ctx: AnalysisContext,
   currentDepth: number,
   visitedFragments: Set<string>
 ): ComplexityResult {
@@ -432,12 +403,12 @@ function analyzeFragmentSpread(
     return { depth: currentDepth, complexity: 0, fieldCount: 0, aliasCount: 0 }
   }
 
-  const fragment = fragments.get(fragmentName)
+  const fragment = ctx.fragments.get(fragmentName)
   if (!fragment) {
     return { depth: currentDepth, complexity: 0, fieldCount: 0, aliasCount: 0 }
   }
 
-  const fragmentType = schema.getType(fragment.typeCondition.name.value)
+  const fragmentType = ctx.schema.getType(fragment.typeCondition.name.value)
   if (!(fragmentType instanceof GraphQLObjectType)) {
     return { depth: currentDepth, complexity: 0, fieldCount: 0, aliasCount: 0 }
   }
@@ -448,11 +419,11 @@ function analyzeFragmentSpread(
   return analyzeSelectionSet(
     fragment.selectionSet,
     fragmentType,
-    schema,
-    fragments,
-    fieldComplexities,
-    variables,
-    defaultCost,
+    ctx.schema,
+    ctx.fragments,
+    ctx.fieldComplexities,
+    ctx.variables,
+    ctx.defaultCost,
     currentDepth,
     newVisited
   )
@@ -464,18 +435,14 @@ function analyzeFragmentSpread(
 function analyzeInlineFragment(
   fragment: InlineFragmentNode,
   parentType: GraphQLObjectType,
-  schema: GraphQLSchema,
-  fragments: Map<string, FragmentDefinitionNode>,
-  fieldComplexities: FieldComplexityMap,
-  variables: Record<string, unknown>,
-  defaultCost: number,
+  ctx: AnalysisContext,
   currentDepth: number,
   visitedFragments: Set<string>
 ): ComplexityResult {
   let targetType = parentType
 
   if (fragment.typeCondition) {
-    const conditionType = schema.getType(fragment.typeCondition.name.value)
+    const conditionType = ctx.schema.getType(fragment.typeCondition.name.value)
     if (conditionType instanceof GraphQLObjectType) {
       targetType = conditionType
     }
@@ -484,11 +451,11 @@ function analyzeInlineFragment(
   return analyzeSelectionSet(
     fragment.selectionSet,
     targetType,
-    schema,
-    fragments,
-    fieldComplexities,
-    variables,
-    defaultCost,
+    ctx.schema,
+    ctx.fragments,
+    ctx.fieldComplexities,
+    ctx.variables,
+    ctx.defaultCost,
     currentDepth,
     visitedFragments
   )
