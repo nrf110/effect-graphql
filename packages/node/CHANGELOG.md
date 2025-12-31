@@ -9,4 +9,4 @@
 ### Patch Changes
 
 - Updated dependencies [e83975e]
-  - @effect-gql/core@0.2.0
+  - @effect-gql/core@1.0.0
