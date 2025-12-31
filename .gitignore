@@ -1,6 +1,5 @@
 node_modules/
 dist/
-package-lock.json
 
 # TypeScript build artifacts
 *.tsbuildinfo
@@ -21,3 +20,5 @@ packages/*/test/**/*.d.ts.map
 docs/src/**/*.js
 docs/src/**/*.d.ts
 docs/src/**/*.d.ts.map
+
+.turbo
