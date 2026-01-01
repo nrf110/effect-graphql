@@ -207,6 +207,7 @@ const graphqlRouter = makeGraphQLRouter(schema, Layer.empty, {
   graphiql: {
     path: "/graphiql",
     endpoint: "/graphql",
+    subscriptionEndpoint: "wss://localhost:4002/graphql",
   },
 })
 

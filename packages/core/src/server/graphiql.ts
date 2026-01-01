@@ -1,7 +1,10 @@
 /**
  * Generate HTML for GraphiQL IDE, loading dependencies from CDN
  */
-export const graphiqlHtml = (endpoint: string): string => `<!DOCTYPE html>
+export const graphiqlHtml = (
+  endpoint: string,
+  subscriptionEndpoint?: string
+): string => `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -29,6 +32,7 @@ export const graphiqlHtml = (endpoint: string): string => `<!DOCTYPE html>
     <script>
       const fetcher = GraphiQL.createFetcher({
         url: ${JSON.stringify(endpoint)},
+        subscriptionUrl: ${JSON.stringify(subscriptionEndpoint ?? endpoint)},
       });
       ReactDOM.createRoot(document.getElementById('graphiql')).render(
         React.createElement(GraphiQL, { fetcher })
