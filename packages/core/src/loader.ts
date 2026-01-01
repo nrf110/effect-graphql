@@ -34,7 +34,7 @@ import DataLoader from "dataloader"
 /**
  * Configuration for a single-value loader (one key -> one value)
  */
-interface SingleLoaderDef<K, V, R> {
+export interface SingleLoaderDef<K, V, R> {
   readonly _tag: "single"
   readonly batch: (keys: readonly K[]) => Effect.Effect<readonly V[], Error, R>
   readonly key: (value: V) => K
@@ -43,7 +43,7 @@ interface SingleLoaderDef<K, V, R> {
 /**
  * Configuration for a grouped loader (one key -> many values)
  */
-interface GroupedLoaderDef<K, V, R> {
+export interface GroupedLoaderDef<K, V, R> {
   readonly _tag: "grouped"
   readonly batch: (keys: readonly K[]) => Effect.Effect<readonly V[], Error, R>
   readonly groupBy: (value: V) => K

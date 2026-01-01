@@ -470,9 +470,12 @@ export const makeGraphQLRouter = <R>(
   )
 
   if (resolvedConfig.graphiql) {
-    const { path, endpoint } = resolvedConfig.graphiql
+    const { path, endpoint, subscriptionEndpoint } = resolvedConfig.graphiql
     router = router.pipe(
-      HttpRouter.get(path as HttpRouter.PathInput, HttpServerResponse.html(graphiqlHtml(endpoint)))
+      HttpRouter.get(
+        path as HttpRouter.PathInput,
+        HttpServerResponse.html(graphiqlHtml(endpoint, subscriptionEndpoint))
+      )
     )
   }
 
