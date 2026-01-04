@@ -77,12 +77,95 @@ export const schema = builder.buildSchema()
 export default builder
 ```
 
-### create (Coming Soon)
+### create
 
-Scaffold a new Effect GraphQL project with best practices and common configurations.
+Scaffold a new Effect GraphQL project with your choice of server runtime.
 
 ```bash
-effect-gql create my-app
+# Basic usage
+effect-gql create my-api --server-type node
+
+# Short form
+effect-gql create my-api -s bun
+
+# Interactive mode (prompts for options)
+effect-gql create
+```
+
+#### Server Types
+
+| Type | Package | Best For |
+|------|---------|----------|
+| `node` | `@effect-gql/node` | General Node.js deployments |
+| `bun` | `@effect-gql/bun` | Bun runtime with native WebSocket support |
+| `express` | `@effect-gql/express` | Integrating into existing Express apps |
+| `web` | `@effect-gql/web` | Cloudflare Workers, Deno, edge runtimes |
+
+#### Options
+
+| Option | Description |
+|--------|-------------|
+| `-s, --server-type <type>` | Server type: `node`, `bun`, `express`, or `web` (required) |
+| `-d, --directory <path>` | Target directory (default: `./<name>`) |
+| `--monorepo` | Create as a workspace package (auto-detected) |
+| `--skip-install` | Skip dependency installation |
+| `--package-manager <pm>` | Package manager: `npm`, `pnpm`, `yarn`, or `bun` |
+| `-i, --interactive` | Interactive mode with prompts |
+| `-h, --help` | Show help message |
+
+#### Monorepo Support
+
+The CLI automatically detects if you're inside a monorepo by looking for:
+- `pnpm-workspace.yaml`
+- `package.json` with `workspaces` field
+- `turbo.json`
+
+When in a monorepo, `@effect-gql/*` dependencies use `workspace:*` instead of version numbers:
+
+```bash
+# Inside a pnpm monorepo
+effect-gql create packages/api -s node --monorepo
+```
+
+```json
+// Generated package.json
+{
+  "dependencies": {
+    "@effect-gql/core": "workspace:*",
+    "@effect-gql/node": "workspace:*",
+    // ...
+  }
+}
+```
+
+#### Generated Project Structure
+
+```
+my-api/
+├── package.json
+├── tsconfig.json
+├── .gitignore
+└── src/
+    └── index.ts    # Server entry point with example schema
+```
+
+#### Examples
+
+```bash
+# Create a Node.js server
+effect-gql create my-api --server-type node
+
+# Create a Bun server in a specific directory
+effect-gql create my-api -s bun -d ./packages/graphql
+
+# Create an Express middleware project without installing deps
+effect-gql create my-api -s express --skip-install
+
+# Create a Cloudflare Worker
+effect-gql create my-worker -s web
+
+# Add to an existing monorepo
+effect-gql create @myorg/api -s node -d packages/api --monorepo
 ```
 
 ## Why This Matters
