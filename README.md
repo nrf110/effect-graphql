@@ -11,7 +11,33 @@ A GraphQL framework for Effect-TS that brings full type safety, composability, a
 - **Immutable Builder** - Fluent, pipe-able API for composing schemas from reusable parts
 - **Service Integration** - Use Effect's Layer system for dependency injection
 
-## Installation
+## Getting Started
+
+The easiest way to get started is with the CLI:
+
+```bash
+# Create a new project
+npx @effect-gql/cli create my-api --server-type node
+
+# Start the dev server
+cd my-api
+npm run dev
+```
+
+Your GraphQL server will be running at http://localhost:4000/graphql with a GraphiQL playground at http://localhost:4000/graphiql.
+
+### Server Types
+
+The CLI supports multiple server runtimes:
+
+| Type | Command | Best For |
+|------|---------|----------|
+| Node.js | `--server-type node` | General Node.js deployments |
+| Bun | `--server-type bun` | Bun runtime with native WebSocket support |
+| Express | `--server-type express` | Integrating into existing Express apps |
+| Web | `--server-type web` | Cloudflare Workers, Deno, edge runtimes |
+
+## Manual Installation
 
 ```bash
 npm install @effect-gql/core effect graphql
