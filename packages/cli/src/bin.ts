@@ -12,6 +12,7 @@
 
 import { Effect, Console } from "effect"
 import { runGenerateSchema } from "./commands/generate-schema"
+import { runCreate } from "./commands/create"
 
 const VERSION = "0.1.0"
 
@@ -23,7 +24,7 @@ Usage: effect-gql <command> [options]
 
 Commands:
   generate-schema    Generate GraphQL SDL from a schema module
-  create             Create a new Effect GraphQL project (coming soon)
+  create             Create a new Effect GraphQL project
 
 Options:
   -h, --help         Show this help message
@@ -32,7 +33,7 @@ Options:
 Examples:
   effect-gql generate-schema ./src/schema.ts
   effect-gql generate-schema ./src/schema.ts -o schema.graphql
-  effect-gql create my-app
+  effect-gql create my-app --server-type node
 
 Run 'effect-gql <command> --help' for command-specific help.
 `)
@@ -64,8 +65,7 @@ const main = Effect.gen(function* () {
       break
 
     case "create":
-      yield* Console.log("The 'create' command is coming soon!")
-      yield* Console.log("It will help you scaffold new Effect GraphQL projects.")
+      yield* runCreate(commandArgs)
       break
 
     default:
