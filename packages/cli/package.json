@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "@effect-gql/core": "*",
-    "effect": "^3.19.13",
+    "effect": "^3.19.14",
     "graphql": "^16.0.0"
   },
   "keywords": [

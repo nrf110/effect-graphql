@@ -13,9 +13,9 @@
   "dependencies": {
     "@effect-gql/core": "workspace:*",
     "@effect-gql/node": "workspace:*",
-    "@effect/platform": "^0.94.0",
+    "@effect/platform": "^0.94.1",
     "@effect/platform-node": "^0.104.0",
-    "effect": "^3.19.0",
+    "effect": "^3.19.14",
     "graphql": "^16.0.0",
     "dataloader": "^2.2.3"
   },
