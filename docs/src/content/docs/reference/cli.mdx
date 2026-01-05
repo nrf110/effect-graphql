@@ -89,6 +89,118 @@ const schema = await Effect.runPromise(
 
 `Effect.Effect<GraphQLSchema, Error>` - Effect that produces the loaded schema or fails with an error.
 
+---
+
+### scaffold
+
+Programmatically scaffold a new Effect GraphQL project.
+
+```typescript
+import { scaffold } from "@effect-gql/cli"
+import { Effect, Option } from "effect"
+
+await Effect.runPromise(
+  scaffold({
+    name: "my-api",
+    serverType: "node",
+    directory: Option.none(),
+    monorepo: Option.none(),
+    skipInstall: false,
+    packageManager: Option.none(),
+  })
+)
+```
+
+#### Parameters
+
+The `scaffold` function takes a `CreateOptions` object:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `string` | Package/project name |
+| `serverType` | `ServerType` | `"node"`, `"bun"`, `"express"`, or `"web"` |
+| `directory` | `Option<string>` | Target directory (default: `./<name>`) |
+| `monorepo` | `Option<boolean>` | Create as workspace package (auto-detected if `None`) |
+| `skipInstall` | `boolean` | Skip dependency installation |
+| `packageManager` | `Option<PackageManager>` | `"npm"`, `"pnpm"`, `"yarn"`, or `"bun"` (auto-detected if `None`) |
+
+#### Returns
+
+`Effect.Effect<void, Error>` - Effect that creates the project or fails with an error.
+
+#### Example: Custom Scaffolding Script
+
+```typescript
+import { scaffold, SERVER_TYPES } from "@effect-gql/cli"
+import { Effect, Option, Console } from "effect"
+
+const createProject = (name: string, serverType: string) =>
+  Effect.gen(function* () {
+    yield* Console.log(`Creating ${name} with ${serverType}...`)
+    
+    yield* scaffold({
+      name,
+      serverType: serverType as "node" | "bun" | "express" | "web",
+      directory: Option.some(`./projects/${name}`),
+      monorepo: Option.some(false),
+      skipInstall: true,
+      packageManager: Option.some("pnpm"),
+    })
+    
+    yield* Console.log("Done!")
+  })
+
+Effect.runPromise(createProject("my-api", "node"))
+```
+
+---
+
+## Types
+
+### ServerType
+
+```typescript
+type ServerType = "node" | "bun" | "express" | "web"
+```
+
+### PackageManager
+
+```typescript
+type PackageManager = "npm" | "pnpm" | "yarn" | "bun"
+```
+
+### CreateOptions
+
+```typescript
+interface CreateOptions {
+  readonly name: string
+  readonly serverType: ServerType
+  readonly directory: Option.Option<string>
+  readonly monorepo: Option.Option<boolean>
+  readonly skipInstall: boolean
+  readonly packageManager: Option.Option<PackageManager>
+}
+```
+
+---
+
+## Constants
+
+### SERVER_TYPES
+
+Array of all valid server types.
+
+```typescript
+import { SERVER_TYPES, isValidServerType } from "@effect-gql/cli"
+
+SERVER_TYPES // ["node", "bun", "express", "web"]
+
+isValidServerType("node") // true
+isValidServerType("invalid") // false
+```
+
+---
+
 #### Module Resolution
 
 The module should export one of:
