@@ -1,5 +1,11 @@
 # @effect-gql/cli
 
+## 1.2.0
+
+### Minor Changes
+
+- ad6e492: Added create command to CLI for project scaffolding
+
 ## 2.0.0
 
 ### Minor Changes
