@@ -1,6 +1,6 @@
 {
   "name": "@effect-gql/example-subscriptions",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "Real-time GraphQL subscriptions example with Effect Streams",
   "type": "module",

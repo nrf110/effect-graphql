@@ -1,6 +1,6 @@
 import { Effect, Layer, Runtime, Stream, Queue, Fiber, Deferred } from "effect"
 import { GraphQLSchema, subscribe, GraphQLError } from "graphql"
-import { makeServer, type ServerOptions } from "graphql-ws"
+import type { ServerOptions } from "graphql-ws"
 import type { GraphQLEffectContext } from "../builder/types"
 import type {
   EffectWebSocket,
@@ -209,11 +209,18 @@ const createGraphqlWsSocketAdapter = <R>(socket: EffectWebSocket, runtime: Runti
 }
 
 /**
+ * Type alias for the graphql-ws server instance.
+ */
+type GraphQLWSServer<R> = ReturnType<
+  typeof import("graphql-ws").makeServer<Record<string, unknown>, WSExtra<R>>
+>
+
+/**
  * Run the connection lifecycle - manages message queue, fibers, and cleanup.
  */
 const runConnectionLifecycle = <R>(
   socket: EffectWebSocket,
-  wsServer: ReturnType<typeof makeServer<Record<string, unknown>, WSExtra<R>>>,
+  wsServer: GraphQLWSServer<R>,
   extra: WSExtra<R>
 ): Effect.Effect<void, never, never> =>
   Effect.gen(function* () {
@@ -272,6 +279,19 @@ const runConnectionLifecycle = <R>(
   )
 
 /**
+ * Dynamically import graphql-ws to avoid requiring it at module load time.
+ * This allows @effect-gql/core to be used without graphql-ws installed
+ * as long as WebSocket functionality isn't used.
+ */
+const importGraphqlWs = Effect.tryPromise({
+  try: () => import("graphql-ws"),
+  catch: () =>
+    new Error(
+      "graphql-ws is required for WebSocket subscriptions. Install it with: npm install graphql-ws"
+    ),
+})
+
+/**
  * Create a WebSocket handler for GraphQL subscriptions using the graphql-ws protocol.
  *
  * This function creates a handler that can be used with any WebSocket implementation
@@ -313,32 +333,47 @@ export const makeGraphQLWSHandler = <R>(
   const complexityConfig = options?.complexity
   const fieldComplexities: FieldComplexityMap = options?.fieldComplexities ?? new Map()
 
-  // Build server options using extracted handler factories
-  const serverOptions: ServerOptions<Record<string, unknown>, WSExtra<R>> = {
-    schema,
+  // Lazily create the server on first connection
+  let wsServerPromise: Promise<GraphQLWSServer<R>> | null = null
 
-    context: async (ctx): Promise<GraphQLEffectContext<R> & Record<string, unknown>> => {
-      const extra = ctx.extra as WSExtra<R>
-      return {
-        runtime: extra.runtime,
-        ...extra.connectionParams,
-      }
-    },
+  const getOrCreateServer = async () => {
+    if (!wsServerPromise) {
+      wsServerPromise = Effect.runPromise(importGraphqlWs).then(({ makeServer }) => {
+        // Build server options using extracted handler factories
+        const serverOptions: ServerOptions<Record<string, unknown>, WSExtra<R>> = {
+          schema,
 
-    subscribe: async (args) => subscribe(args),
+          context: async (ctx): Promise<GraphQLEffectContext<R> & Record<string, unknown>> => {
+            const extra = ctx.extra as WSExtra<R>
+            return {
+              runtime: extra.runtime,
+              ...extra.connectionParams,
+            }
+          },
 
-    onConnect: makeOnConnectHandler(options),
-    onDisconnect: makeOnDisconnectHandler(options),
-    onSubscribe: makeOnSubscribeHandler(options, schema, complexityConfig, fieldComplexities),
-    onComplete: makeOnCompleteHandler(options),
-    onError: makeOnErrorHandler(options),
+          subscribe: async (args) => subscribe(args),
+
+          onConnect: makeOnConnectHandler(options),
+          onDisconnect: makeOnDisconnectHandler(options),
+          onSubscribe: makeOnSubscribeHandler(options, schema, complexityConfig, fieldComplexities),
+          onComplete: makeOnCompleteHandler(options),
+          onError: makeOnErrorHandler(options),
+        }
+
+        return makeServer(serverOptions)
+      })
+    }
+    return wsServerPromise
   }
-
-  const wsServer = makeServer(serverOptions)
 
   // Return the connection handler
   return (socket: EffectWebSocket): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
+      const wsServer = yield* Effect.tryPromise({
+        try: () => getOrCreateServer(),
+        catch: (error) => error as Error,
+      })
+
       const runtime = yield* Effect.provide(Effect.runtime<R>(), layer)
 
       const extra: WSExtra<R> = {
