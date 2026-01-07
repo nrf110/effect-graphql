@@ -1,5 +1,11 @@
 # @effect-gql/core
 
+## 1.1.1
+
+### Patch Changes
+
+- bf2ca21: Dynamically load the graphql-ws when makeGraphQLWSHandler is called
+
 ## 1.1.0
 
 ### Minor Changes

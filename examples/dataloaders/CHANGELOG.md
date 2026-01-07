@@ -1,5 +1,12 @@
 # @effect-gql/example-dataloaders
 
+## 0.0.2
+
+### Patch Changes
+
+- Updated dependencies [bf2ca21]
+  - @effect-gql/core@1.1.1
+
 ## 0.0.1
 
 ### Patch Changes
