@@ -9,11 +9,11 @@ import type { ServerType, TemplateContext } from "../types"
  * Keep in sync with the main packages
  */
 const VERSIONS = {
-  core: "^1.1.0",
-  node: "^1.1.0",
-  bun: "^1.1.0",
-  express: "^1.1.0",
-  web: "^1.1.0",
+  core: "^1.2.0",
+  node: "^1.2.0",
+  bun: "^1.2.0",
+  express: "^1.2.0",
+  web: "^1.2.0",
   effect: "^3.19.0",
   platform: "^0.94.0",
   platformNode: "^0.104.0",
@@ -32,12 +32,10 @@ interface Dependencies {
 /**
  * Get dependencies for each server type
  */
-const getDependencies = (serverType: ServerType, isMonorepo: boolean): Dependencies => {
-  const toVersion = (pkg: string, version: string): string =>
-    isMonorepo && pkg.startsWith("@effect-gql/") ? "workspace:*" : version
-
+const getDependencies = (serverType: ServerType, _isMonorepo: boolean): Dependencies => {
+  // Always use published versions - workspace:* is only for effect-gql internal development
   const baseDeps: Record<string, string> = {
-    "@effect-gql/core": toVersion("@effect-gql/core", VERSIONS.core),
+    "@effect-gql/core": VERSIONS.core,
     "@effect/platform": VERSIONS.platform,
     effect: VERSIONS.effect,
     graphql: VERSIONS.graphql,
@@ -53,7 +51,7 @@ const getDependencies = (serverType: ServerType, isMonorepo: boolean): Dependenc
       return {
         dependencies: {
           ...baseDeps,
-          "@effect-gql/node": toVersion("@effect-gql/node", VERSIONS.node),
+          "@effect-gql/node": VERSIONS.node,
           "@effect/platform-node": VERSIONS.platformNode,
         },
         devDependencies: baseDevDeps,
@@ -63,7 +61,7 @@ const getDependencies = (serverType: ServerType, isMonorepo: boolean): Dependenc
       return {
         dependencies: {
           ...baseDeps,
-          "@effect-gql/bun": toVersion("@effect-gql/bun", VERSIONS.bun),
+          "@effect-gql/bun": VERSIONS.bun,
           "@effect/platform-bun": VERSIONS.platformBun,
         },
         devDependencies: {
@@ -76,7 +74,7 @@ const getDependencies = (serverType: ServerType, isMonorepo: boolean): Dependenc
       return {
         dependencies: {
           ...baseDeps,
-          "@effect-gql/express": toVersion("@effect-gql/express", VERSIONS.express),
+          "@effect-gql/express": VERSIONS.express,
           express: VERSIONS.expressLib,
         },
         devDependencies: {
@@ -89,7 +87,7 @@ const getDependencies = (serverType: ServerType, isMonorepo: boolean): Dependenc
       return {
         dependencies: {
           ...baseDeps,
-          "@effect-gql/web": toVersion("@effect-gql/web", VERSIONS.web),
+          "@effect-gql/web": VERSIONS.web,
         },
         devDependencies: baseDevDeps,
       }
