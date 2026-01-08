@@ -11,8 +11,11 @@
  */
 
 import { Effect, Console } from "effect"
-import { printSchema, lexicographicSortSchema } from "@effect-gql/core"
-import type { GraphQLSchema } from "graphql"
+import {
+  printSchema as defaultPrintSchema,
+  lexicographicSortSchema as defaultLexicographicSortSchema,
+  type GraphQLSchema,
+} from "graphql"
 import * as fs from "fs"
 import * as path from "path"
 import { createRequire } from "module"
@@ -30,6 +33,58 @@ interface GenerateOptions {
   /** Watch for changes */
   watch?: boolean
 }
+
+export interface GraphQLUtilities {
+  printSchema: (schema: GraphQLSchema) => string
+  lexicographicSortSchema: (schema: GraphQLSchema) => GraphQLSchema
+}
+
+/** Default utilities using the CLI's bundled graphql package */
+const defaultUtilities: GraphQLUtilities = {
+  printSchema: defaultPrintSchema,
+  lexicographicSortSchema: defaultLexicographicSortSchema,
+}
+
+/**
+ * Load graphql utilities from the same location as @effect-gql/core uses.
+ * This resolves the "Cannot use GraphQLScalarType from another module" error that occurs
+ * when the CLI's graphql version differs from the user's project.
+ *
+ * The key insight is that the schema is built using @effect-gql/core, which internally
+ * uses graphql. We need to use the same graphql instance that @effect-gql/core uses.
+ *
+ * IMPORTANT: We use dynamic import() instead of require() because graphql has separate
+ * ESM (index.mjs) and CJS (index.js) entry points. If the schema module was loaded via
+ * ESM (e.g., by vitest or tsx), we need to import the ESM version to get the same instance.
+ *
+ * @param modulePath - The absolute path to the schema module being loaded
+ */
+const loadGraphQLUtilities = (modulePath: string): Effect.Effect<GraphQLUtilities, Error> =>
+  Effect.tryPromise({
+    try: async () => {
+      // Create a require function that resolves from the module's directory
+      const moduleRequire = createRequire(modulePath)
+
+      // First, find where @effect-gql/core is located (this is what the schema module uses)
+      const corePath = moduleRequire.resolve("@effect-gql/core")
+
+      // Then resolve graphql path from @effect-gql/core's location
+      const coreRequire = createRequire(corePath)
+      const graphqlPath = coreRequire.resolve("graphql")
+
+      // Use dynamic import to get the ESM version (matches how the schema module loads it)
+      const graphql = await import(graphqlPath)
+
+      return {
+        printSchema: graphql.printSchema,
+        lexicographicSortSchema: graphql.lexicographicSortSchema,
+      }
+    },
+    catch: (error) =>
+      new Error(
+        `Failed to load graphql from project. Ensure @effect-gql/core and graphql are installed: ${error}`
+      ),
+  })
 
 /**
  * Load a schema from a module path.
@@ -88,11 +143,19 @@ export const loadSchema = (modulePath: string): Effect.Effect<GraphQLSchema, Err
   })
 
 /**
- * Generate SDL from a schema
+ * Generate SDL from a schema.
+ *
+ * When called from the CLI, pass utilities loaded from the user's project
+ * to avoid graphql version mismatch issues. When called directly (e.g., in tests),
+ * the bundled graphql utilities are used as defaults.
  */
-export const generateSDL = (schema: GraphQLSchema, options: { sort?: boolean } = {}): string => {
-  const finalSchema = options.sort !== false ? lexicographicSortSchema(schema) : schema
-  return printSchema(finalSchema)
+export const generateSDL = (
+  schema: GraphQLSchema,
+  options: { sort?: boolean; utilities?: GraphQLUtilities } = {}
+): string => {
+  const utilities = options.utilities ?? defaultUtilities
+  const finalSchema = options.sort !== false ? utilities.lexicographicSortSchema(schema) : schema
+  return utilities.printSchema(finalSchema)
 }
 
 /**
@@ -102,15 +165,22 @@ export const generateSDLFromModule = (
   modulePath: string,
   options: { sort?: boolean } = {}
 ): Effect.Effect<string, Error> =>
-  loadSchema(modulePath).pipe(Effect.map((schema) => generateSDL(schema, options)))
+  Effect.gen(function* () {
+    const absolutePath = path.resolve(process.cwd(), modulePath)
+    const utilities = yield* loadGraphQLUtilities(absolutePath)
+    const schema = yield* loadSchema(modulePath)
+    return generateSDL(schema, { ...options, utilities })
+  })
 
 /**
  * Run the generate-schema command
  */
 const run = (options: GenerateOptions): Effect.Effect<void, Error> =>
   Effect.gen(function* () {
+    const absolutePath = path.resolve(process.cwd(), options.modulePath)
+    const utilities = yield* loadGraphQLUtilities(absolutePath)
     const schema = yield* loadSchema(options.modulePath)
-    const sdl = generateSDL(schema, { sort: options.sort })
+    const sdl = generateSDL(schema, { sort: options.sort, utilities })
 
     if (options.output) {
       const outputPath = path.resolve(process.cwd(), options.output)
