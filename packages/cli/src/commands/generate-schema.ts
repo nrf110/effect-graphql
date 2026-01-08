@@ -15,6 +15,10 @@ import { printSchema, lexicographicSortSchema } from "@effect-gql/core"
 import type { GraphQLSchema } from "graphql"
 import * as fs from "fs"
 import * as path from "path"
+import { createRequire } from "module"
+
+// Create a require function for ESM compatibility (needed for cache clearing in watch mode)
+const require = createRequire(import.meta.url)
 
 interface GenerateOptions {
   /** Path to the schema module */
