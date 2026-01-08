@@ -194,6 +194,10 @@ importers:
         version: 8.18.3
 
   packages/cli:
+    dependencies:
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
     devDependencies:
       '@effect-gql/core':
         specifier: '*'
