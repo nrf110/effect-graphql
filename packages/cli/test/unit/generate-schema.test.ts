@@ -139,6 +139,25 @@ describe("generate-schema", () => {
       expect(sdl).toContain("type Post")
     })
 
+    it("should load multi-file schema with relative imports via CLI binary", () => {
+      // This tests that the CLI correctly handles TypeScript schemas that import
+      // from sibling files using relative paths (e.g., ./types)
+      const fixturePath = path.join(fixturesDir, "multi-file-schema.ts")
+      const sdl = execSync(
+        `node ${path.join(cliDir, "dist/bin.js")} generate-schema ${fixturePath}`,
+        {
+          encoding: "utf-8",
+          cwd: cliDir,
+        }
+      )
+
+      expect(sdl).toContain("type Query")
+      expect(sdl).toContain("type User")
+      expect(sdl).toContain("type Post")
+      // The multi-file schema has an author field on Post that the single-file doesn't
+      expect(sdl).toContain("author: User")
+    })
+
     it("should fail for non-existent module", async () => {
       const result = await Effect.runPromise(
         generateSDLFromModule(path.join(fixturesDir, "non-existent-module.ts")).pipe(Effect.either)

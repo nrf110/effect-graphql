@@ -13,8 +13,66 @@
 import { Effect, Console } from "effect"
 import { runGenerateSchema } from "./commands/generate-schema"
 import { runCreate } from "./commands/create"
+import { spawnSync } from "child_process"
+import { createRequire } from "module"
+
+const require = createRequire(import.meta.url)
 
 const VERSION = "0.1.0"
+
+/**
+ * Check if tsx loader is already registered by looking at process flags.
+ * When running with `node --import tsx`, the loader is active.
+ */
+const isTsxLoaderActive = (): boolean => {
+  // Check if we're running under tsx or have tsx imported
+  const execArgv = process.execArgv.join(" ")
+  return execArgv.includes("tsx") || execArgv.includes("ts-node")
+}
+
+/**
+ * For generate-schema with TypeScript files, re-execute with tsx loader.
+ * Returns true if we re-executed, false if we should continue normally.
+ */
+const maybeReexecWithTsx = (): boolean => {
+  const args = process.argv.slice(2)
+
+  // Only applies to generate-schema command with a TypeScript file
+  if (args[0] !== "generate-schema") {
+    return false
+  }
+
+  // Find the module path (first positional argument after command)
+  const modulePath = args.slice(1).find((arg) => !arg.startsWith("-"))
+  if (!modulePath || !modulePath.endsWith(".ts")) {
+    return false
+  }
+
+  // If tsx is already active, continue normally
+  if (isTsxLoaderActive()) {
+    return false
+  }
+
+  // Re-execute with tsx loader
+  try {
+    // Verify tsx is available (will throw if not installed)
+    require.resolve("tsx")
+
+    // Use tsx to run the CLI again with the same arguments
+    const result = spawnSync(process.execPath, ["--import", "tsx", ...process.argv.slice(1)], {
+      stdio: "inherit",
+      cwd: process.cwd(),
+      env: process.env,
+    })
+
+    process.exitCode = result.status ?? 1
+    return true
+  } catch (error) {
+    // tsx not available, fall through to try direct import
+    // This may fail for multi-file TypeScript schemas
+    return false
+  }
+}
 
 const printHelp = (): void => {
   console.log(`
@@ -41,6 +99,12 @@ Run 'effect-gql <command> --help' for command-specific help.
 
 const printVersion = (): void => {
   console.log(`effect-gql v${VERSION}`)
+}
+
+// Check if we need to re-execute with tsx for TypeScript files
+if (maybeReexecWithTsx()) {
+  // We re-executed, exit this process
+  process.exit(process.exitCode ?? 0)
 }
 
 const main = Effect.gen(function* () {
