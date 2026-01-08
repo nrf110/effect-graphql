@@ -35,6 +35,9 @@
     "effect": "^3.19.0",
     "graphql": "^16.0.0"
   },
+  "dependencies": {
+    "tsx": "^4.21.0"
+  },
   "devDependencies": {
     "@effect-gql/core": "*",
     "effect": "^3.19.14",

@@ -55,11 +55,12 @@ const maybeReexecWithTsx = (): boolean => {
 
   // Re-execute with tsx loader
   try {
-    // Verify tsx is available (will throw if not installed)
-    require.resolve("tsx")
+    // Resolve the full path to tsx from this CLI's node_modules
+    // This is necessary because --import resolves relative to cwd, not the CLI location
+    const tsxPath = require.resolve("tsx")
 
     // Use tsx to run the CLI again with the same arguments
-    const result = spawnSync(process.execPath, ["--import", "tsx", ...process.argv.slice(1)], {
+    const result = spawnSync(process.execPath, ["--import", tsxPath, ...process.argv.slice(1)], {
       stdio: "inherit",
       cwd: process.cwd(),
       env: process.env,
