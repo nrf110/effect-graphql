@@ -224,6 +224,65 @@ app.use("/graphql", graphqlMiddleware(schema, serviceLayer))
 app.listen(4000)
 ```
 
+### Web Standards (Cloudflare Workers, Deno)
+
+The `@effect-gql/web` package provides a handler for Web standard environments:
+
+<Tabs>
+  <TabItem label="Cloudflare Workers">
+```typescript
+import { toRouter } from "@effect-gql/core"
+import { toHandler } from "@effect-gql/web"
+import { Layer } from "effect"
+
+const router = toRouter(builder, serviceLayer, { graphiql: true })
+const { handler } = toHandler(router, serviceLayer)
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    return handler(request)
+  }
+}
+```
+  </TabItem>
+  <TabItem label="Deno">
+```typescript
+import { toRouter } from "@effect-gql/core"
+import { toHandler } from "@effect-gql/web"
+import { Layer } from "effect"
+
+const router = toRouter(builder, serviceLayer, { graphiql: true })
+const { handler } = toHandler(router, serviceLayer)
+
+Deno.serve({ port: 4000 }, (request) => handler(request))
+```
+  </TabItem>
+  <TabItem label="With Custom Routes">
+```typescript
+import { toRouter } from "@effect-gql/core"
+import { toHandler } from "@effect-gql/web"
+import { HttpRouter, HttpServerResponse } from "@effect/platform"
+import { Layer } from "effect"
+
+// Compose GraphQL with other routes
+const graphqlRouter = toRouter(builder, serviceLayer, { graphiql: true })
+
+const app = HttpRouter.empty.pipe(
+  HttpRouter.get("/health", HttpServerResponse.json({ status: "ok" })),
+  HttpRouter.concat(graphqlRouter)
+)
+
+const { handler } = toHandler(app, serviceLayer)
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    return handler(request)
+  }
+}
+```
+  </TabItem>
+</Tabs>
+
 ## Environment Configuration
 
 Load router configuration from environment variables using `GraphQLRouterConfigFromEnv`:
