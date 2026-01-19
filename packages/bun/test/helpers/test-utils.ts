@@ -10,10 +10,10 @@ import {
   type CloseEvent,
 } from "@effect-gql/core"
 import { DirectiveLocation, GraphQLSchema } from "graphql"
-import { createServer, IncomingMessage, ServerResponse, Server } from "node:http"
+import { createServer, IncomingMessage, ServerResponse } from "node:http"
 import { createClient } from "graphql-ws"
 import { WebSocket, WebSocketServer } from "ws"
-import { Queue, Deferred, Fiber } from "effect"
+import { Queue, Deferred } from "effect"
 
 /**
  * Create a test schema with various GraphQL features:

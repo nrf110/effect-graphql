@@ -3,12 +3,7 @@ import { Cause, Effect, Layer, Context } from "effect"
 import * as S from "effect/Schema"
 import { HttpApp, HttpServerResponse } from "@effect/platform"
 import { GraphQLSchemaBuilder } from "../../../src/builder/schema-builder"
-import {
-  makeGraphQLRouter,
-  defaultErrorHandler,
-  type ErrorHandler,
-} from "../../../src/server/router"
-import type { ComplexityConfig } from "../../../src/server/complexity"
+import { makeGraphQLRouter, type ErrorHandler } from "../../../src/server/router"
 
 // Test service
 interface TestService {
@@ -403,13 +398,6 @@ describe("router.ts", () => {
   // makeGraphQLRouter - Complexity limiting
   // ==========================================================================
   describe("makeGraphQLRouter - Complexity limiting", () => {
-    // Schema with nested types for complexity testing
-    const Post = S.Struct({
-      id: S.String,
-      title: S.String,
-      content: S.String,
-    })
-
     const User = S.Struct({
       id: S.String,
       name: S.String,

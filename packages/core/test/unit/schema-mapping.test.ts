@@ -1,11 +1,10 @@
 import { describe, it, expect } from "vitest"
-import * as S from "effect/Schema"
+import { Effect, Schema as S } from "effect"
 import {
   GraphQLString,
   GraphQLInt,
   GraphQLFloat,
   GraphQLBoolean,
-  GraphQLNonNull,
   GraphQLList,
   GraphQLObjectType,
   GraphQLInputObjectType,
@@ -438,10 +437,12 @@ describe("schema-mapping.ts", () => {
         lastName: S.String,
       })
 
+      type User = S.Schema.Type<typeof UserSchema>
+
       const result = toGraphQLObjectType("User", UserSchema, {
         fullName: {
           type: GraphQLString,
-          resolve: (parent) => `${parent.firstName} ${parent.lastName}`,
+          resolve: (parent: User) => Effect.succeed(`${parent.firstName} ${parent.lastName}`),
         },
       })
 
@@ -462,7 +463,7 @@ describe("schema-mapping.ts", () => {
             limit: { type: GraphQLInt },
           },
           description: "User's posts",
-          resolve: () => [],
+          resolve: () => Effect.succeed([]),
         },
       })
 

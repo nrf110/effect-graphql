@@ -8,8 +8,6 @@ import {
   GraphQLUnionType,
   GraphQLInterfaceType,
   GraphQLType,
-  GraphQLNonNull,
-  GraphQLList,
   isNonNullType,
   isListType,
   isNamedType,

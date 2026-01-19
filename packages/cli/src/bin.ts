@@ -68,7 +68,7 @@ const maybeReexecWithTsx = (): boolean => {
 
     process.exitCode = result.status ?? 1
     return true
-  } catch (error) {
+  } catch (_) {
     // tsx not available, fall through to try direct import
     // This may fail for multi-file TypeScript schemas
     return false

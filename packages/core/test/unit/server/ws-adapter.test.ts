@@ -1,12 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
-import { Effect, Layer, Stream, Queue, Deferred, Fiber, Ref, Context } from "effect"
+import { describe, it, expect } from "vitest"
+import { Effect, Layer, Stream, Queue, Deferred, Fiber, Context } from "effect"
 import {
   GraphQLSchema,
   GraphQLObjectType,
   GraphQLString,
   GraphQLInt,
   GraphQLNonNull,
-  buildSchema,
 } from "graphql"
 import { makeGraphQLWSHandler } from "../../../src/server/ws-adapter"
 import type { EffectWebSocket, WebSocketError, CloseEvent } from "../../../src/server/ws-types"
@@ -280,7 +279,7 @@ describe("ws-adapter.ts", () => {
         },
       })
 
-      const { socket, sendMessage, closeConnection, sentMessages } = createMockSocket()
+      const { socket, sendMessage, closeConnection } = createMockSocket()
       const fiber = Effect.runFork(handler(socket))
 
       await new Promise((r) => setTimeout(r, 10))
@@ -451,7 +450,7 @@ describe("ws-adapter.ts", () => {
 
       // The hook is registered when makeGraphQLWSHandler is called
       const handler = makeGraphQLWSHandler(schema, Layer.empty, {
-        onComplete: (_ctx, msg) => {
+        onComplete: (_ctx, _) => {
           hookRegistered = true
           return Effect.void
         },
@@ -496,7 +495,7 @@ describe("ws-adapter.ts", () => {
 
       // The hook is registered when makeGraphQLWSHandler is called
       const handler = makeGraphQLWSHandler(schema, Layer.empty, {
-        onError: (_ctx, error) => {
+        onError: (_ctx, _) => {
           // This would be called if graphql-ws triggers an error
           return Effect.void
         },

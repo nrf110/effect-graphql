@@ -191,6 +191,22 @@ export function toGraphQLTypeWithRegistry(
     return handleTupleTypeAST(ast, ctx)
   }
 
+  // Handle Declaration (e.g., Option, Schema.Class)
+  if (ast._tag === "Declaration") {
+    // Option declarations map to nullable inner type
+    if (isOptionDeclaration(ast)) {
+      const innerType = getOptionInnerType(ast)
+      if (innerType) {
+        return toGraphQLTypeWithRegistry(S.make(innerType), ctx)
+      }
+    }
+    // For other declarations (like Schema.Class), extract TypeLiteral from typeParameters
+    const typeParams = (ast as any).typeParameters
+    if (typeParams && typeParams.length > 0) {
+      return toGraphQLTypeWithRegistry(S.make(typeParams[0]), ctx)
+    }
+  }
+
   // Handle Suspend (recursive/self-referential schemas)
   if (ast._tag === "Suspend") {
     const innerAst = (ast as any).f()
@@ -234,10 +250,51 @@ function findRegisteredInterface(
 }
 
 /**
- * Handle Transformation AST nodes (arrays, optional, Schema.Class, etc.)
+ * Check if a Declaration AST node represents an Option type.
+ * Option declarations have a TypeConstructor annotation of 'effect/Option'.
+ */
+function isOptionDeclaration(ast: AST.AST): boolean {
+  if (ast._tag === "Declaration") {
+    const annotations = (ast as any).annotations
+    if (annotations) {
+      const TypeConstructorSymbol = Symbol.for("effect/annotation/TypeConstructor")
+      const typeConstructor = annotations[TypeConstructorSymbol]
+      if (typeConstructor && typeConstructor._tag === "effect/Option") {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Get the inner type from an Option Declaration.
+ */
+function getOptionInnerType(ast: AST.AST): AST.AST | undefined {
+  if (ast._tag === "Declaration") {
+    const typeParams = (ast as any).typeParameters
+    if (typeParams && typeParams.length > 0) {
+      return typeParams[0]
+    }
+  }
+  return undefined
+}
+
+/**
+ * Handle Transformation AST nodes (arrays, optional, Schema.Class, Option, etc.)
  */
 function handleTransformationAST(ast: any, ctx: TypeConversionContext): any {
   const toAst = ast.to
+
+  // Check if it's an Option transformation (e.g., S.OptionFromNullOr)
+  // These should map to the nullable inner type
+  if (isOptionDeclaration(toAst)) {
+    const innerType = getOptionInnerType(toAst)
+    if (innerType) {
+      // Return the inner type as nullable (not wrapped in NonNull)
+      return toGraphQLTypeWithRegistry(S.make(innerType), ctx)
+    }
+  }
 
   // Check if it's an array (readonly array on the to side)
   if (toAst._tag === "TupleType") {

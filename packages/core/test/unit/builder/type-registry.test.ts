@@ -493,11 +493,6 @@ describe("type-registry.ts", () => {
       const inputs = new Map()
       inputs.set("UserInput", { name: "UserInput", schema: InputSchema })
 
-      // S.optional creates a Union with UndefinedKeyword
-      const OptionalInput = S.Struct({
-        data: S.optional(InputSchema),
-      })
-
       // Test the inner type extraction
       const result = toGraphQLInputTypeWithRegistry(
         InputSchema,

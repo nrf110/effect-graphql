@@ -1,21 +1,11 @@
 import { describe, it, expect } from "vitest"
 import { Effect } from "effect"
-import {
-  GraphQLSchema,
-  GraphQLObjectType,
-  GraphQLString,
-  GraphQLList,
-  GraphQLInt,
-  GraphQLNonNull,
-  buildSchema,
-} from "graphql"
+import { GraphQLSchema, buildSchema } from "graphql"
 import {
   validateComplexity,
   defaultComplexityCalculator,
   depthOnlyCalculator,
   combineCalculators,
-  ComplexityLimitExceededError,
-  ComplexityAnalysisError,
   type FieldComplexityMap,
   type ComplexityConfig,
 } from "../../../src/server/complexity"

@@ -1,4 +1,5 @@
 import { Effect, Runtime, Stream, Queue, Fiber, Option } from "effect"
+import * as S from "effect/Schema"
 import { GraphQLFieldConfig, GraphQLResolveInfo } from "graphql"
 import type {
   FieldRegistration,
@@ -15,6 +16,51 @@ import {
   type TypeConversionContext,
   type InputTypeLookupCache,
 } from "./type-registry"
+
+/**
+ * Check if a schema represents an Option type (e.g., S.OptionFromNullOr).
+ * These schemas have a Transformation with a Declaration on the "to" side
+ * that has a TypeConstructor annotation of 'effect/Option'.
+ */
+function isOptionSchema(schema: S.Schema<any, any, any>): boolean {
+  const ast = schema.ast
+  if (ast._tag === "Transformation") {
+    const toAst = (ast as any).to
+    if (toAst._tag === "Declaration") {
+      // Check for the TypeConstructor annotation which identifies Option types
+      const annotations = toAst.annotations
+      if (annotations) {
+        const TypeConstructorSymbol = Symbol.for("effect/annotation/TypeConstructor")
+        const typeConstructor = annotations[TypeConstructorSymbol]
+        if (typeConstructor && typeConstructor._tag === "effect/Option") {
+          return true
+        }
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Encode a resolver's output value using the schema.
+ * This is primarily needed for Option types where Option.none() needs to become null
+ * and Option.some(x) needs to become x.
+ *
+ * For non-Option schemas, this is a no-op pass-through.
+ */
+function encodeResolverOutput<A, I>(
+  schema: S.Schema<A, I, any>,
+  value: A
+): Effect.Effect<I, never, never> {
+  // Only encode Option schemas - other schemas pass through unchanged
+  // This optimization avoids the overhead of encoding for simple types
+  if (isOptionSchema(schema)) {
+    // Use Schema.encode to convert Option<A> back to I (null | A)
+    return Effect.orDie(S.encode(schema)(value))
+  }
+  // For non-Option types, pass through unchanged
+  return Effect.succeed(value as unknown as I)
+}
 
 /**
  * Context needed for building fields
@@ -105,7 +151,11 @@ export function buildField(
       const middlewareContext: MiddlewareContext = { parent: _parent, args, info }
       effect = applyMiddleware(effect, middlewareContext, ctx.middlewares)
 
-      return await Runtime.runPromise(context.runtime)(effect)
+      // Execute the resolver
+      const result = await Runtime.runPromise(context.runtime)(effect)
+
+      // Encode the result (converts Option.none() to null, Option.some(x) to x)
+      return await Runtime.runPromise(context.runtime)(encodeResolverOutput(config.type, result))
     },
   }
 
@@ -147,7 +197,11 @@ export function buildObjectField(
       const middlewareContext: MiddlewareContext = { parent, args, info }
       effect = applyMiddleware(effect, middlewareContext, ctx.middlewares)
 
-      return await Runtime.runPromise(context.runtime)(effect)
+      // Execute the resolver
+      const result = await Runtime.runPromise(context.runtime)(effect)
+
+      // Encode the result (converts Option.none() to null, Option.some(x) to x)
+      return await Runtime.runPromise(context.runtime)(encodeResolverOutput(config.type, result))
     },
   }
 
@@ -212,7 +266,7 @@ export function buildSubscriptionField(
     },
 
     // The resolve function transforms each yielded value
-    // If no custom resolve is provided, return the payload directly
+    // If no custom resolve is provided, encode and return the payload directly
     resolve: config.resolve
       ? async (value, args, context: GraphQLEffectContext<any>, info: GraphQLResolveInfo) => {
           let effect = config.resolve!(value, args)
@@ -221,9 +275,18 @@ export function buildSubscriptionField(
           const middlewareContext: MiddlewareContext = { parent: value, args, info }
           effect = applyMiddleware(effect, middlewareContext, ctx.middlewares)
 
-          return await Runtime.runPromise(context.runtime)(effect)
+          // Execute the resolver
+          const result = await Runtime.runPromise(context.runtime)(effect)
+
+          // Encode the result (converts Option.none() to null, Option.some(x) to x)
+          return await Runtime.runPromise(context.runtime)(
+            encodeResolverOutput(config.type, result)
+          )
         }
-      : (value) => value,
+      : async (value, _args, context: GraphQLEffectContext<any>) => {
+          // Even without custom resolve, encode Option values
+          return await Runtime.runPromise(context.runtime)(encodeResolverOutput(config.type, value))
+        },
   }
 
   if (config.args) {

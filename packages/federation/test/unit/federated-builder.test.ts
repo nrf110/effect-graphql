@@ -2,12 +2,10 @@ import { describe, it, expect } from "vitest"
 import { Effect } from "effect"
 import * as S from "effect/Schema"
 import {
-  GraphQLSchema,
   GraphQLObjectType,
   GraphQLUnionType,
   GraphQLNonNull,
   GraphQLList,
-  printSchema,
   graphql,
 } from "@effect-gql/core"
 import {

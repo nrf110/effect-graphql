@@ -1,14 +1,11 @@
 import { describe, it, expect } from "vitest"
-import { Effect, Stream, Layer, Runtime, Fiber } from "effect"
+import { Effect, Stream, Runtime, Option } from "effect"
 import * as S from "effect/Schema"
 import {
   GraphQLObjectType,
   GraphQLEnumType,
   GraphQLInputObjectType,
   GraphQLString,
-  GraphQLInt,
-  GraphQLList,
-  GraphQLNonNull,
   isNonNullType,
 } from "graphql"
 import {
@@ -34,14 +31,6 @@ const createFieldBuilderContext = (): FieldBuilderContext => ({
   directiveRegistrations: new Map(),
   middlewares: [],
 })
-
-// Helper to create test runtime context
-const createTestContext = <R>(
-  layer: Layer.Layer<R, never, never>
-): Promise<GraphQLEffectContext<R>> =>
-  Effect.runPromise(
-    Effect.scoped(Layer.toRuntime(layer)).pipe(Effect.map((runtime) => ({ runtime })))
-  )
 
 // Simple test context for effects with no requirements
 const createSimpleContext = (): GraphQLEffectContext<never> => ({
@@ -514,8 +503,8 @@ describe("field-builders.ts", () => {
         ctx
       )
 
-      // When no custom resolve, it should return the value directly
-      const result = config.resolve!("payload", {}, createSimpleContext(), {} as any)
+      // When no custom resolve, it should return the value directly (but async for Option encoding)
+      const result = await config.resolve!("payload", {}, createSimpleContext(), {} as any)
       expect(result).toBe("payload")
     })
 
@@ -1051,6 +1040,159 @@ describe("field-builders.ts", () => {
       const otherInfo = { fieldName: "test", parentType: { name: "Subscription" } } as any
       const otherResult = await config.resolve!(null, {}, testContext, otherInfo)
       expect(otherResult).toBe("value")
+    })
+  })
+
+  // ==========================================================================
+  // Option Type Encoding
+  // ==========================================================================
+  describe("Option Type Encoding", () => {
+    it("should encode Option.none() to null for S.OptionFromNullOr", async () => {
+      const ctx = createFieldBuilderContext()
+      const config = buildField(
+        {
+          type: S.OptionFromNullOr(S.String),
+          resolve: () => Effect.succeed(Option.none()),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const result = await config.resolve!(null, {}, testContext, {} as any)
+      expect(result).toBe(null)
+    })
+
+    it("should encode Option.some(value) to value for S.OptionFromNullOr", async () => {
+      const ctx = createFieldBuilderContext()
+      const config = buildField(
+        {
+          type: S.OptionFromNullOr(S.String),
+          resolve: () => Effect.succeed(Option.some("hello")),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const result = await config.resolve!(null, {}, testContext, {} as any)
+      expect(result).toBe("hello")
+    })
+
+    it("should encode Option.none() to undefined for S.OptionFromUndefinedOr", async () => {
+      const ctx = createFieldBuilderContext()
+      const config = buildField(
+        {
+          type: S.OptionFromUndefinedOr(S.String),
+          resolve: () => Effect.succeed(Option.none()),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const result = await config.resolve!(null, {}, testContext, {} as any)
+      expect(result).toBe(undefined)
+    })
+
+    it("should encode Option.some(value) to value for S.OptionFromUndefinedOr", async () => {
+      const ctx = createFieldBuilderContext()
+      const config = buildField(
+        {
+          type: S.OptionFromUndefinedOr(S.String),
+          resolve: () => Effect.succeed(Option.some("world")),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const result = await config.resolve!(null, {}, testContext, {} as any)
+      expect(result).toBe("world")
+    })
+
+    it("should encode Option with Int inner type", async () => {
+      const ctx = createFieldBuilderContext()
+      const config = buildField(
+        {
+          type: S.OptionFromNullOr(S.Int),
+          resolve: () => Effect.succeed(Option.some(42)),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const result = await config.resolve!(null, {}, testContext, {} as any)
+      expect(result).toBe(42)
+    })
+
+    it("should not modify non-Option types", async () => {
+      const ctx = createFieldBuilderContext()
+      const config = buildField(
+        {
+          type: S.String,
+          resolve: () => Effect.succeed("plain string"),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const result = await config.resolve!(null, {}, testContext, {} as any)
+      expect(result).toBe("plain string")
+    })
+
+    it("should encode Option in object fields", async () => {
+      const ctx = createFieldBuilderContext()
+      const config = buildObjectField(
+        {
+          type: S.OptionFromNullOr(S.String),
+          resolve: (parent: { value: Option.Option<string> }) => Effect.succeed(parent.value),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+
+      // Test with Some
+      const someResult = await config.resolve!(
+        { value: Option.some("test") },
+        {},
+        testContext,
+        {} as any
+      )
+      expect(someResult).toBe("test")
+
+      // Test with None
+      const noneResult = await config.resolve!({ value: Option.none() }, {}, testContext, {} as any)
+      expect(noneResult).toBe(null)
+    })
+
+    it("should encode Option with object inner type", async () => {
+      const UserSchema = S.Struct({ id: S.String, name: S.String })
+      const ctx = createFieldBuilderContext()
+      const config = buildField(
+        {
+          type: S.OptionFromNullOr(UserSchema),
+          resolve: () => Effect.succeed(Option.some({ id: "1", name: "Alice" })),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const result = await config.resolve!(null, {}, testContext, {} as any)
+      expect(result).toEqual({ id: "1", name: "Alice" })
+    })
+
+    it("should encode Option.none() with object inner type to null", async () => {
+      const UserSchema = S.Struct({ id: S.String, name: S.String })
+      const ctx = createFieldBuilderContext()
+      const config = buildField(
+        {
+          type: S.OptionFromNullOr(UserSchema),
+          resolve: () => Effect.succeed(Option.none()),
+        },
+        ctx
+      )
+
+      const testContext = createSimpleContext()
+      const result = await config.resolve!(null, {}, testContext, {} as any)
+      expect(result).toBe(null)
     })
   })
 })

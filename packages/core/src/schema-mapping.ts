@@ -42,6 +42,49 @@ const isIntegerType = (ast: AST.AST): boolean => {
 }
 
 /**
+ * Check if a Declaration AST node represents an Option type.
+ * Option declarations have a TypeConstructor annotation of 'effect/Option'.
+ */
+const isOptionDeclaration = (ast: AST.AST): boolean => {
+  if (ast._tag === "Declaration") {
+    const annotations = (ast as any).annotations
+    if (annotations) {
+      const TypeConstructorSymbol = Symbol.for("effect/annotation/TypeConstructor")
+      const typeConstructor = annotations[TypeConstructorSymbol]
+      if (typeConstructor && typeConstructor._tag === "effect/Option") {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Check if a Transformation represents an Option schema (e.g., S.OptionFromNullOr).
+ * These have a Declaration with "Option" identifier on the "to" side.
+ */
+const isOptionTransformation = (ast: AST.AST): boolean => {
+  if (ast._tag === "Transformation") {
+    return isOptionDeclaration((ast as any).to)
+  }
+  return false
+}
+
+/**
+ * Get the inner type from an Option Declaration.
+ * Option<A> has A as the first type parameter.
+ */
+const getOptionInnerType = (ast: AST.AST): AST.AST | undefined => {
+  if (ast._tag === "Declaration") {
+    const typeParams = (ast as any).typeParameters
+    if (typeParams && typeParams.length > 0) {
+      return typeParams[0]
+    }
+  }
+  return undefined
+}
+
+/**
  * Convert an Effect Schema to a GraphQL output type
  */
 export const toGraphQLType = (schema: S.Schema<any, any, any>): GraphQLOutputType => {
@@ -109,7 +152,32 @@ export const toGraphQLType = (schema: S.Schema<any, any, any>): GraphQLOutputTyp
 
   // Handle transformations - use the "to" side
   if (ast._tag === "Transformation") {
+    // Special handling for Option transformations (e.g., S.OptionFromNullOr)
+    // These should map to the nullable inner type
+    if (isOptionTransformation(ast)) {
+      const innerType = getOptionInnerType(ast.to)
+      if (innerType) {
+        // Return the inner type as nullable (not wrapped in NonNull)
+        return toGraphQLType(S.make(innerType))
+      }
+    }
     return toGraphQLType(S.make(ast.to))
+  }
+
+  // Handle Declaration (e.g., Option from S.Option)
+  if (ast._tag === "Declaration") {
+    // Option declarations map to nullable inner type
+    if (isOptionDeclaration(ast)) {
+      const innerType = getOptionInnerType(ast)
+      if (innerType) {
+        return toGraphQLType(S.make(innerType))
+      }
+    }
+    // For other declarations (like Schema.Class), extract TypeLiteral from typeParameters
+    const typeParams = (ast as any).typeParameters
+    if (typeParams && typeParams.length > 0) {
+      return toGraphQLType(S.make(typeParams[0]))
+    }
   }
 
   // Handle unions (use first type as fallback)
@@ -197,12 +265,37 @@ export const toGraphQLInputType = (schema: S.Schema<any, any, any>): GraphQLInpu
 
   // Handle transformations - use the "from" side for input
   if (ast._tag === "Transformation") {
+    // For Option transformations, the "from" side is Union(T, null/undefined)
+    // which the Union handler below will process correctly
     return toGraphQLInputType(S.make(ast.from))
   }
 
-  // Handle unions (use first type as fallback)
+  // Handle Declaration (for completeness, though inputs typically use "from" side)
+  if (ast._tag === "Declaration") {
+    // Option declarations - use the inner type
+    if (isOptionDeclaration(ast)) {
+      const innerType = getOptionInnerType(ast)
+      if (innerType) {
+        return toGraphQLInputType(S.make(innerType))
+      }
+    }
+    // For other declarations, extract from typeParameters
+    const typeParams = (ast as any).typeParameters
+    if (typeParams && typeParams.length > 0) {
+      return toGraphQLInputType(S.make(typeParams[0]))
+    }
+  }
+
+  // Handle unions (use first non-null/undefined type)
   if (ast._tag === "Union") {
     const types = ast.types
+    // Filter out null and undefined for nullable unions
+    const nonNullTypes = types
+      .filter((t: AST.AST) => t._tag !== "Literal" || (t as any).literal !== null)
+      .filter((t: AST.AST) => t._tag !== "UndefinedKeyword")
+    if (nonNullTypes.length > 0) {
+      return toGraphQLInputType(S.make(nonNullTypes[0]))
+    }
     if (types.length > 0) {
       return toGraphQLInputType(S.make(types[0]))
     }
@@ -237,7 +330,25 @@ export const toGraphQLObjectType = <T>(
   schema: S.Schema<any, any, any>,
   additionalFields?: Record<string, AdditionalField<T, any, any, any, any>>
 ): GraphQLObjectType => {
-  const ast = schema.ast
+  let ast = schema.ast
+
+  // Handle Transformation wrappers (e.g., from optionalWith, Schema.Class)
+  // Recurse through transformations to find the TypeLiteral
+  while (ast._tag === "Transformation") {
+    ast = (ast as any).to
+  }
+
+  // Handle Declaration (e.g., Schema.Class)
+  if (ast._tag === "Declaration") {
+    const typeParams = (ast as any).typeParameters
+    if (typeParams && typeParams.length > 0) {
+      ast = typeParams[0]
+      // May need to recurse through more transformations
+      while (ast._tag === "Transformation") {
+        ast = (ast as any).to
+      }
+    }
+  }
 
   if (ast._tag === "TypeLiteral") {
     const fields: GraphQLFieldConfigMap<any, any> = {}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { Effect, Layer, Option } from "effect"
+import { Effect, Option } from "effect"
 import * as S from "effect/Schema"
 import { GraphQLSchemaBuilder } from "../../src/builder/schema-builder"
 import { execute } from "../../src/builder/execute"

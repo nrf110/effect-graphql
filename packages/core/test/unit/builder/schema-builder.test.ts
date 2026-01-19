@@ -8,7 +8,6 @@ import {
   GraphQLUnionType,
   GraphQLInputObjectType,
   GraphQLInterfaceType,
-  GraphQLString,
   GraphQLInt,
   DirectiveLocation,
   isNonNullType,

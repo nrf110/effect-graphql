@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import {
-  startTestServer,
   startTestServerWithWS,
   executeQuery,
   executeSubscription,
