@@ -654,7 +654,7 @@ describe("type-registry.ts", () => {
         friends: S.Array(S.suspend(() => PersonSchema)),
       })
 
-      const personType = new GraphQLObjectType({
+      const personType: GraphQLObjectType = new GraphQLObjectType({
         name: "Person",
         fields: () => ({
           name: { type: GraphQLString },
@@ -713,7 +713,7 @@ describe("type-registry.ts", () => {
         children: S.optional(S.Array(S.suspend(() => NestedInputSchema))),
       })
 
-      const nestedInputType = new GraphQLInputObjectType({
+      const nestedInputType: GraphQLInputObjectType = new GraphQLInputObjectType({
         name: "NestedInput",
         fields: () => ({
           value: { type: GraphQLString },

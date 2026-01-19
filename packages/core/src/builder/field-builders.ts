@@ -48,10 +48,10 @@ function isOptionSchema(schema: S.Schema<any, any, any>): boolean {
  *
  * For non-Option schemas, this is a no-op pass-through.
  */
-function encodeResolverOutput<A, I>(
-  schema: S.Schema<A, I, any>,
+function encodeResolverOutput<A, I, R>(
+  schema: S.Schema<A, I, R>,
   value: A
-): Effect.Effect<I, never, never> {
+): Effect.Effect<I, never, R> {
   // Only encode Option schemas - other schemas pass through unchanged
   // This optimization avoids the overhead of encoding for simple types
   if (isOptionSchema(schema)) {

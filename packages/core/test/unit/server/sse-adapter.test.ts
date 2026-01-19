@@ -293,7 +293,8 @@ describe("sse-adapter.ts", () => {
       )
 
       expect(connectCalled).toBe(true)
-      expect(headersReceived?.get("authorization")).toBe("Bearer token")
+      expect(headersReceived).not.toBeNull()
+      expect(headersReceived!.get("authorization")).toBe("Bearer token")
     })
   })
 
@@ -628,8 +629,8 @@ describe("sse-adapter.ts", () => {
       // Give time for cleanup to run
       await new Promise((r) => setTimeout(r, 100))
 
-      // Note: The cleanup happens via the Stream.async cleanup function
-      // which is called when the stream is interrupted
+      // The iterator's return() method should be called when the stream is cancelled
+      expect(iteratorCleanedUp).toBe(true)
     })
   })
 

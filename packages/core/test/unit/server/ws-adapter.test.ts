@@ -446,14 +446,10 @@ describe("ws-adapter.ts", () => {
   describe("onComplete hook", () => {
     it("should register onComplete hook in handler options", async () => {
       const schema = createTestSchema()
-      let hookRegistered = false
 
       // The hook is registered when makeGraphQLWSHandler is called
       const handler = makeGraphQLWSHandler(schema, Layer.empty, {
-        onComplete: (_ctx, _) => {
-          hookRegistered = true
-          return Effect.void
-        },
+        onComplete: () => Effect.void,
       })
 
       // Verify handler was created (hook is wired internally to graphql-ws)
@@ -483,9 +479,6 @@ describe("ws-adapter.ts", () => {
 
       closeConnection(1000, "Done")
       await Effect.runPromise(Fiber.join(fiber))
-
-      // Note: Whether hookRegistered is true depends on graphql-ws internals
-      // This test verifies the wiring is set up correctly
     })
   })
 

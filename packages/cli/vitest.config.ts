@@ -1,5 +1,12 @@
 import { defineConfig } from "vitest/config"
 import path from "path"
+import { createRequire } from "module"
+
+// Resolve graphql from @effect-gql/core's location to ensure single instance
+const require = createRequire(import.meta.url)
+const coreGraphqlPath = path.dirname(
+  require.resolve("graphql", { paths: [path.resolve(__dirname, "../core")] })
+)
 
 export default defineConfig({
   test: {
@@ -13,8 +20,8 @@ export default defineConfig({
   resolve: {
     alias: {
       "@effect-gql/core": path.resolve(__dirname, "../core/src"),
+      // Ensure all graphql imports resolve to the same instance used by @effect-gql/core
+      graphql: coreGraphqlPath,
     },
-    // Dedupe graphql to ensure single instance across all imports
-    dedupe: ["graphql"],
   },
 })

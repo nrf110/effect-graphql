@@ -1,4 +1,4 @@
-import { defineConfig } from "tsup";
+import { defineConfig } from "tsup"
 
 export default defineConfig({
   entry: {
@@ -11,9 +11,6 @@ export default defineConfig({
   clean: true,
   splitting: false,
   treeshake: true,
-  external: [
-    "effect",
-    "@effect-gql/core",
-    "graphql",
-  ],
-});
+  tsconfig: "tsconfig.build.json",
+  external: ["effect", "@effect-gql/core", "graphql"],
+})
