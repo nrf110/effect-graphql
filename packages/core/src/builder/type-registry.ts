@@ -285,10 +285,38 @@ function getOptionInnerType(ast: AST.AST): AST.AST | undefined {
  */
 function handleTransformationAST(ast: any, ctx: TypeConversionContext): any {
   const toAst = ast.to
+  const fromAst = ast.from
 
   // Check if it's an Option transformation (e.g., S.OptionFromNullOr)
   // These should map to the nullable inner type
   if (isOptionDeclaration(toAst)) {
+    // For S.OptionFromNullOr, the wrapped type is in the 'from' Union, not in typeParameters
+    // Structure: Transformation { from: Union[X.ast, Literal], to: Declaration(Option) }
+    if (fromAst && fromAst._tag === "Union") {
+      // Check if any union member is a registered type
+      for (const memberAst of fromAst.types) {
+        // Skip null/undefined literals
+        if (memberAst._tag === "Literal") continue
+        if (memberAst._tag === "UndefinedKeyword") continue
+
+        const typeName = ctx.astToTypeName?.get(memberAst)
+        if (typeName) {
+          const result = ctx.typeRegistry.get(typeName)
+          if (result) return result
+        }
+        // Check for transformations wrapping registered types
+        if (memberAst._tag === "Transformation") {
+          const innerToAst = memberAst.to
+          const transformedTypeName = ctx.astToTypeName?.get(innerToAst)
+          if (transformedTypeName) {
+            const result = ctx.typeRegistry.get(transformedTypeName)
+            if (result) return result
+          }
+        }
+      }
+    }
+
+    // Fallback to typeParameters for S.Option(X)
     const innerType = getOptionInnerType(toAst)
     if (innerType) {
       // Return the inner type as nullable (not wrapped in NonNull)
@@ -327,6 +355,25 @@ function handleUnionAST(ast: any, ctx: TypeConversionContext): any {
     // This is a Union of object types - check if it matches a registered union
     const unionType = findRegisteredUnion(ast.types, ctx)
     if (unionType) return unionType
+  }
+
+  // Check if any union member is a registered type (handles S.Option(RegisteredType))
+  // S.Option/S.OptionFromNullOr wraps the type inside a Union in the 'from' position
+  for (const memberAst of ast.types) {
+    const typeName = ctx.astToTypeName?.get(memberAst)
+    if (typeName) {
+      const result = ctx.typeRegistry.get(typeName)
+      if (result) return result
+    }
+    // Also check for transformations wrapping registered types
+    if (memberAst._tag === "Transformation") {
+      const toAst = memberAst.to
+      const transformedTypeName = ctx.astToTypeName?.get(toAst)
+      if (transformedTypeName) {
+        const result = ctx.typeRegistry.get(transformedTypeName)
+        if (result) return result
+      }
+    }
   }
 
   // Fallback: use first type
@@ -607,6 +654,33 @@ export function toGraphQLInputTypeWithRegistry(
   // Handle transformations (like S.optional wrapping) AFTER registry lookup
   if (ast._tag === "Transformation") {
     const toAst = (ast as any).to
+    const fromAst = (ast as any).from
+
+    // For S.OptionFromNullOr, check the 'from' Union for registered input types
+    // Structure: Transformation { from: Union[X.ast, Literal], to: Declaration(Option) }
+    if (isOptionDeclaration(toAst) && fromAst && fromAst._tag === "Union") {
+      for (const memberAst of fromAst.types) {
+        // Skip null/undefined literals
+        if (memberAst._tag === "Literal") continue
+        if (memberAst._tag === "UndefinedKeyword") continue
+
+        const inputName = cache?.astToInputName?.get(memberAst)
+        if (inputName) {
+          const result = inputRegistry.get(inputName)
+          if (result) return result
+        }
+        // Check for transformations wrapping registered input types
+        if (memberAst._tag === "Transformation") {
+          const innerToAst = memberAst.to
+          const transformedInputName = cache?.astToInputName?.get(innerToAst)
+          if (transformedInputName) {
+            const result = inputRegistry.get(transformedInputName)
+            if (result) return result
+          }
+        }
+      }
+    }
+
     return toGraphQLInputTypeWithRegistry(
       S.make(toAst),
       enumRegistry,
@@ -644,6 +718,25 @@ export function toGraphQLInputTypeWithRegistry(
         enums,
         cache
       )
+    }
+
+    // Check if any union member is a registered input type (handles S.Option(RegisteredInput))
+    // S.Option/S.OptionFromNullOr wraps the type inside a Union in the 'from' position
+    for (const memberAst of unionAst.types) {
+      const inputName = cache?.astToInputName?.get(memberAst)
+      if (inputName) {
+        const result = inputRegistry.get(inputName)
+        if (result) return result
+      }
+      // Also check for transformations wrapping registered input types
+      if (memberAst._tag === "Transformation") {
+        const toAst = memberAst.to
+        const transformedInputName = cache?.astToInputName?.get(toAst)
+        if (transformedInputName) {
+          const result = inputRegistry.get(transformedInputName)
+          if (result) return result
+        }
+      }
     }
 
     const allLiterals = unionAst.types.every((t: any) => t._tag === "Literal")
