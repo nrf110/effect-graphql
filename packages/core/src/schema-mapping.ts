@@ -129,6 +129,10 @@ export const toGraphQLType = (schema: S.Schema<any, any, any>): GraphQLOutputTyp
 
     for (const field of ast.propertySignatures) {
       const fieldName = String(field.name)
+
+      // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
+      if (fieldName === "_tag") continue
+
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLType(fieldSchema)
 
@@ -243,6 +247,10 @@ export const toGraphQLInputType = (schema: S.Schema<any, any, any>): GraphQLInpu
 
     for (const field of ast.propertySignatures) {
       const fieldName = String(field.name)
+
+      // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
+      if (fieldName === "_tag") continue
+
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLInputType(fieldSchema)
 
@@ -356,6 +364,10 @@ export const toGraphQLObjectType = <T>(
     // Add fields from schema
     for (const field of ast.propertySignatures) {
       const fieldName = String(field.name)
+
+      // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
+      if (fieldName === "_tag") continue
+
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLType(fieldSchema)
 
@@ -400,6 +412,10 @@ export const toGraphQLArgs = (schema: S.Schema<any, any, any>): GraphQLFieldConf
 
     for (const field of ast.propertySignatures) {
       const fieldName = String(field.name)
+
+      // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
+      if (fieldName === "_tag") continue
+
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLInputType(fieldSchema)
 

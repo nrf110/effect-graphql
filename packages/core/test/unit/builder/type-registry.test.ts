@@ -314,7 +314,8 @@ describe("type-registry.ts", () => {
       const fields = schemaToFields(UserSchema, ctx)
       expect(fields.id).toBeDefined()
       expect(fields.name).toBeDefined()
-      expect(fields._tag).toBeDefined()
+      // _tag is filtered out as it's an internal discriminator not needed in GraphQL
+      expect(fields._tag).toBeUndefined()
     })
 
     it("should handle Schema.Class (Transformation)", () => {

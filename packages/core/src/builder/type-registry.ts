@@ -442,8 +442,15 @@ export function schemaToFields(
   // Handle Declaration (Schema.Class wraps TypeLiteral in Declaration)
   if (ast._tag === "Declaration") {
     const typeParams = (ast as any).typeParameters
-    if (typeParams && typeParams.length > 0 && typeParams[0]._tag === "TypeLiteral") {
-      ast = typeParams[0]
+    if (typeParams && typeParams.length > 0) {
+      let innerAst = typeParams[0]
+      // Unwrap transformation to get to TypeLiteral (e.g., when fields have DateFromSelf)
+      while (innerAst._tag === "Transformation") {
+        innerAst = innerAst.to
+      }
+      if (innerAst._tag === "TypeLiteral") {
+        ast = innerAst
+      }
     }
   }
 
@@ -452,6 +459,10 @@ export function schemaToFields(
 
     for (const field of (ast as any).propertySignatures) {
       const fieldName = String(field.name)
+
+      // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
+      if (fieldName === "_tag") continue
+
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLTypeWithRegistry(fieldSchema, ctx)
 
@@ -480,13 +491,22 @@ export function schemaToInputFields(
   enums: Map<string, EnumRegistration>,
   cache?: InputTypeLookupCache
 ): GraphQLInputFieldConfigMap {
-  const ast = schema.ast
+  let ast = schema.ast
+
+  // Unwrap transformations to get to the underlying type
+  while (ast._tag === "Transformation") {
+    ast = (ast as any).to
+  }
 
   if (ast._tag === "TypeLiteral") {
     const fields: GraphQLInputFieldConfigMap = {}
 
     for (const field of ast.propertySignatures) {
       const fieldName = String(field.name)
+
+      // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
+      if (fieldName === "_tag") continue
+
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLInputTypeWithRegistry(
         fieldSchema,
@@ -566,20 +586,8 @@ export function toGraphQLInputTypeWithRegistry(
 ): any {
   const ast = schema.ast
 
-  // Handle transformations (like S.optional wrapping)
-  if (ast._tag === "Transformation") {
-    const toAst = (ast as any).to
-    return toGraphQLInputTypeWithRegistry(
-      S.make(toAst),
-      enumRegistry,
-      inputRegistry,
-      inputs,
-      enums,
-      cache
-    )
-  }
-
-  // Check if this schema matches a registered input type (O(1) with cache)
+  // Check if this schema matches a registered input type FIRST (O(1) with cache)
+  // This must happen before transformation handling to find registered types
   if (cache?.schemaToInputName || cache?.astToInputName) {
     const inputName = cache.schemaToInputName?.get(schema) ?? cache.astToInputName?.get(ast)
     if (inputName) {
@@ -594,6 +602,19 @@ export function toGraphQLInputTypeWithRegistry(
         if (result) return result
       }
     }
+  }
+
+  // Handle transformations (like S.optional wrapping) AFTER registry lookup
+  if (ast._tag === "Transformation") {
+    const toAst = (ast as any).to
+    return toGraphQLInputTypeWithRegistry(
+      S.make(toAst),
+      enumRegistry,
+      inputRegistry,
+      inputs,
+      enums,
+      cache
+    )
   }
 
   // Check if this schema matches a registered enum
@@ -701,6 +722,10 @@ export function toGraphQLArgsWithRegistry(
 
     for (const field of (ast as any).propertySignatures) {
       const fieldName = String(field.name)
+
+      // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
+      if (fieldName === "_tag") continue
+
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLInputTypeWithRegistry(
         fieldSchema,
