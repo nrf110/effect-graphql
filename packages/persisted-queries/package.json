@@ -1,6 +1,6 @@
 {
   "name": "@effect-gql/persisted-queries",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Apollo Persisted Queries support for @effect-gql/core",
   "repository": {
     "url": "https://github.com/nrf110/effect-gql"
@@ -29,7 +29,7 @@
     "test:watch": "vitest"
   },
   "peerDependencies": {
-    "@effect-gql/core": "^1.4.1",
+    "@effect-gql/core": "^1.4.2",
     "@effect/platform": "^0.94.1",
     "effect": "^3.19.0",
     "graphql": "^16.0.0"
