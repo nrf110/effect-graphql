@@ -19,6 +19,8 @@ import {
   toGraphQLInputTypeWithRegistry,
   toGraphQLArgsWithRegistry,
   TypeConversionContext,
+  buildInputTypeLookupCache,
+  buildReverseLookups,
 } from "../../../src/builder/type-registry"
 
 // Helper to create a minimal context
@@ -821,6 +823,330 @@ describe("type-registry.ts", () => {
 
       expect(statusType).toBe(StatusEnum)
       expect(filterType).toBe(filterInputType)
+    })
+  })
+
+  // ==========================================================================
+  // Bug fixes - Nested Transformations
+  // ==========================================================================
+  describe("Bug fixes - Nested Transformations", () => {
+    it("should handle S.Class with transformation fields (DateFromSelf)", () => {
+      // Bug 1: schemaToFields should unwrap nested Transformations in S.Class
+      class Event extends S.Class<Event>("Event")({
+        id: S.String,
+        createdAt: S.DateFromSelf,
+      }) {}
+
+      const ctx = createEmptyContext()
+      const fields = schemaToFields(Event, ctx)
+
+      expect(fields.id).toBeDefined()
+      expect(fields.createdAt).toBeDefined()
+      expect(Object.keys(fields)).toHaveLength(2)
+    })
+
+    it("should handle S.Class with multiple transformation fields", () => {
+      class Record extends S.Class<Record>("Record")({
+        id: S.String,
+        created: S.DateFromSelf,
+        updated: S.DateFromSelf,
+        value: S.Number,
+      }) {}
+
+      const ctx = createEmptyContext()
+      const fields = schemaToFields(Record, ctx)
+
+      expect(fields.id).toBeDefined()
+      expect(fields.created).toBeDefined()
+      expect(fields.updated).toBeDefined()
+      expect(fields.value).toBeDefined()
+    })
+
+    it("should handle schemaToInputFields with transformation schema (TaggedStruct)", () => {
+      // Bug 3: schemaToInputFields should unwrap Transformations
+      // TaggedStruct creates a Transformation that wraps a TypeLiteral
+      const InputData = S.TaggedStruct("InputData", {
+        name: S.String,
+        value: S.Number,
+      })
+
+      const fields = schemaToInputFields(InputData, new Map(), new Map(), new Map(), new Map())
+
+      expect(fields.name).toBeDefined()
+      expect(fields.value).toBeDefined()
+      // _tag should be filtered out
+      expect(fields._tag).toBeUndefined()
+    })
+  })
+
+  // ==========================================================================
+  // Bug fixes - Registry lookup order for input types
+  // ==========================================================================
+  describe("Bug fixes - Registry lookup order", () => {
+    it("should find registered input type before handling transformations", () => {
+      // Bug 2: Registry lookup should happen BEFORE transformation handling
+      class CursorInput extends S.Class<CursorInput>("CursorInput")({
+        value: S.String,
+      }) {}
+
+      const cursorInputType = new GraphQLInputObjectType({
+        name: "CursorInput",
+        fields: { value: { type: GraphQLString } },
+      })
+
+      const inputRegistry = new Map<string, GraphQLInputObjectType>()
+      inputRegistry.set("CursorInput", cursorInputType)
+
+      const inputs = new Map()
+      inputs.set("CursorInput", { name: "CursorInput", schema: CursorInput })
+
+      // The schema is a Transformation (S.Class), but should still be found
+      const result = toGraphQLInputTypeWithRegistry(
+        CursorInput,
+        new Map(),
+        inputRegistry,
+        inputs,
+        new Map()
+      )
+
+      expect(result).toBe(cursorInputType)
+    })
+
+    it("should find registered input type when wrapped in optional", () => {
+      const InnerInput = S.Struct({ value: S.String })
+      const innerInputType = new GraphQLInputObjectType({
+        name: "InnerInput",
+        fields: { value: { type: GraphQLString } },
+      })
+
+      const inputRegistry = new Map<string, GraphQLInputObjectType>()
+      inputRegistry.set("InnerInput", innerInputType)
+
+      const inputs = new Map()
+      inputs.set("InnerInput", { name: "InnerInput", schema: InnerInput })
+
+      // When used as an optional field, should still resolve to registered type
+      const WrapperSchema = S.Struct({
+        inner: S.optional(InnerInput),
+      })
+
+      const fields = schemaToInputFields(WrapperSchema, new Map(), inputRegistry, inputs, new Map())
+      expect(fields.inner.type).toBe(innerInputType)
+    })
+  })
+
+  // ==========================================================================
+  // Bug fixes - S.Option and Union member traversal
+  // ==========================================================================
+  describe("Bug fixes - S.Option and Union handling", () => {
+    it("should find registered type inside S.Option Union (from position)", () => {
+      // S.OptionFromNullOr creates: Transformation { from: Union[X.ast, Literal], to: Declaration }
+      const ActorSchema = S.Struct({ id: S.String, name: S.String })
+      const actorType = new GraphQLObjectType({
+        name: "Actor",
+        fields: { id: { type: GraphQLString }, name: { type: GraphQLString } },
+      })
+
+      const ctx = createEmptyContext()
+      ctx.types.set("Actor", { name: "Actor", schema: ActorSchema })
+      ctx.typeRegistry.set("Actor", actorType)
+
+      // Create an optional actor schema
+      const OptionalActorSchema = S.OptionFromNullOr(ActorSchema)
+
+      const result = toGraphQLTypeWithRegistry(OptionalActorSchema, ctx)
+      expect(result).toBe(actorType)
+    })
+
+    it("should find registered input type inside S.Option Union", () => {
+      const CursorSchema = S.Struct({ value: S.String })
+      const cursorInputType = new GraphQLInputObjectType({
+        name: "CursorInput",
+        fields: { value: { type: GraphQLString } },
+      })
+
+      const inputRegistry = new Map<string, GraphQLInputObjectType>()
+      inputRegistry.set("CursorInput", cursorInputType)
+
+      const inputs = new Map()
+      inputs.set("CursorInput", { name: "CursorInput", schema: CursorSchema })
+
+      // Build cache with unwrapped AST forms
+      const cache = buildInputTypeLookupCache(inputs, new Map())
+
+      const OptionalCursorSchema = S.OptionFromNullOr(CursorSchema)
+
+      const result = toGraphQLInputTypeWithRegistry(
+        OptionalCursorSchema,
+        new Map(),
+        inputRegistry,
+        inputs,
+        new Map(),
+        cache
+      )
+
+      expect(result).toBe(cursorInputType)
+    })
+
+    it("should find registered type inside Option.Some value field", () => {
+      // S.Option creates: Union[Option.None, Option.Some{ value: X }]
+      const ItemSchema = S.Struct({ id: S.String })
+      const itemType = new GraphQLObjectType({
+        name: "Item",
+        fields: { id: { type: GraphQLString } },
+      })
+
+      const ctx = createEmptyContext()
+      ctx.types.set("Item", { name: "Item", schema: ItemSchema })
+      ctx.typeRegistry.set("Item", itemType)
+
+      // S.Option wraps the type in Option.Some's value field
+      const OptionalItemSchema = S.Option(ItemSchema)
+
+      const result = toGraphQLTypeWithRegistry(OptionalItemSchema, ctx)
+      expect(result).toBe(itemType)
+    })
+
+    it("should find registered input inside Option.Some value field", () => {
+      const FilterSchema = S.Struct({ term: S.String })
+      const filterInputType = new GraphQLInputObjectType({
+        name: "FilterInput",
+        fields: { term: { type: GraphQLString } },
+      })
+
+      const inputRegistry = new Map<string, GraphQLInputObjectType>()
+      inputRegistry.set("FilterInput", filterInputType)
+
+      const inputs = new Map()
+      inputs.set("FilterInput", { name: "FilterInput", schema: FilterSchema })
+
+      const cache = buildInputTypeLookupCache(inputs, new Map())
+
+      const OptionalFilterSchema = S.Option(FilterSchema)
+
+      const result = toGraphQLInputTypeWithRegistry(
+        OptionalFilterSchema,
+        new Map(),
+        inputRegistry,
+        inputs,
+        new Map(),
+        cache
+      )
+
+      expect(result).toBe(filterInputType)
+    })
+  })
+
+  // ==========================================================================
+  // Bug fixes - Lookup cache with unwrapped AST forms
+  // ==========================================================================
+  describe("Bug fixes - Lookup cache unwrapped AST forms", () => {
+    it("buildInputTypeLookupCache should map unwrapped transformation ASTs", () => {
+      // A Schema.Class is a Transformation wrapping a Declaration wrapping a TypeLiteral
+      class MyInput extends S.Class<MyInput>("MyInput")({
+        value: S.String,
+      }) {}
+
+      const inputs = new Map()
+      inputs.set("MyInput", { name: "MyInput", schema: MyInput })
+
+      const cache = buildInputTypeLookupCache(inputs, new Map())
+
+      // The cache should have the original AST
+      expect(cache.astToInputName!.get(MyInput.ast)).toBe("MyInput")
+
+      // And also unwrapped forms (Transformation.to, Declaration.typeParameters[0])
+      const transformationTo = (MyInput.ast as any).to
+      expect(cache.astToInputName!.get(transformationTo)).toBe("MyInput")
+    })
+
+    it("buildReverseLookups should map unwrapped transformation ASTs for types", () => {
+      class MyType extends S.Class<MyType>("MyType")({
+        id: S.String,
+      }) {}
+
+      const myGraphQLType = new GraphQLObjectType({
+        name: "MyType",
+        fields: { id: { type: GraphQLString } },
+      })
+
+      const ctx = createEmptyContext()
+      ctx.types.set("MyType", { name: "MyType", schema: MyType })
+      ctx.typeRegistry.set("MyType", myGraphQLType)
+
+      buildReverseLookups(ctx)
+
+      // The lookup should have the original AST
+      expect(ctx.astToTypeName!.get(MyType.ast)).toBe("MyType")
+
+      // And also unwrapped forms
+      const transformationTo = (MyType.ast as any).to
+      expect(ctx.astToTypeName!.get(transformationTo)).toBe("MyType")
+    })
+
+    it("should find registered type via unwrapped AST lookup", () => {
+      class UserType extends S.Class<UserType>("UserType")({
+        id: S.String,
+        name: S.String,
+      }) {}
+
+      const userGraphQLType = new GraphQLObjectType({
+        name: "UserType",
+        fields: { id: { type: GraphQLString }, name: { type: GraphQLString } },
+      })
+
+      const ctx = createEmptyContext()
+      ctx.types.set("UserType", { name: "UserType", schema: UserType })
+      ctx.typeRegistry.set("UserType", userGraphQLType)
+
+      // The schema is a transformation, lookup should work via unwrapped AST
+      const result = toGraphQLTypeWithRegistry(UserType, ctx)
+      expect(result).toBe(userGraphQLType)
+    })
+  })
+
+  // ==========================================================================
+  // _tag field filtering
+  // ==========================================================================
+  describe("_tag field filtering", () => {
+    it("should filter out _tag from TaggedStruct in schemaToFields", () => {
+      const ctx = createEmptyContext()
+      const TaggedSchema = S.TaggedStruct("MyTag", {
+        id: S.String,
+        value: S.Number,
+      })
+
+      const fields = schemaToFields(TaggedSchema, ctx)
+
+      expect(fields._tag).toBeUndefined()
+      expect(fields.id).toBeDefined()
+      expect(fields.value).toBeDefined()
+    })
+
+    it("should filter out _tag from TaggedStruct in schemaToInputFields", () => {
+      const TaggedSchema = S.TaggedStruct("MyInput", {
+        id: S.String,
+        data: S.String,
+      })
+
+      const fields = schemaToInputFields(TaggedSchema, new Map(), new Map(), new Map(), new Map())
+
+      expect(fields._tag).toBeUndefined()
+      expect(fields.id).toBeDefined()
+      expect(fields.data).toBeDefined()
+    })
+
+    it("should filter out _tag from TaggedStruct in toGraphQLArgsWithRegistry", () => {
+      const TaggedArgs = S.TaggedStruct("MyArgs", {
+        id: S.String,
+        limit: S.Int,
+      })
+
+      const args = toGraphQLArgsWithRegistry(TaggedArgs, new Map(), new Map(), new Map(), new Map())
+
+      expect(args._tag).toBeUndefined()
+      expect(args.id).toBeDefined()
+      expect(args.limit).toBeDefined()
     })
   })
 })

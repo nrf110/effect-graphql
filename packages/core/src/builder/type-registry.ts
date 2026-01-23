@@ -407,6 +407,20 @@ function handleUnionAST(ast: any, ctx: TypeConversionContext): any {
         if (result) return result
       }
     }
+    // Check for Option.Some pattern - TypeLiteral with a 'value' field containing the wrapped type
+    if (memberAst._tag === "TypeLiteral") {
+      const valueField = memberAst.propertySignatures?.find(
+        (p: any) => String(p.name) === "value"
+      )
+      if (valueField) {
+        // Recursively resolve the value type - this handles transformations, nested options, etc.
+        const innerResult = toGraphQLTypeWithRegistry(S.make(valueField.type), ctx)
+        // Return if we found a registered type (has a proper name, not auto-generated)
+        if (innerResult) {
+          return innerResult
+        }
+      }
+    }
   }
 
   // Fallback: use first type
@@ -701,8 +715,9 @@ export function toGraphQLInputTypeWithRegistry(
     const toAst = (ast as any).to
     const fromAst = (ast as any).from
 
-    // For S.OptionFromNullOr, check the 'from' Union for registered input types
-    // Structure: Transformation { from: Union[X.ast, Literal], to: Declaration(Option) }
+    // For S.OptionFromNullOr and S.Option, check the 'from' Union for registered input types
+    // S.OptionFromNullOr: Transformation { from: Union[X.ast, Literal], to: Declaration(Option) }
+    // S.Option: Transformation { from: Union[Option.None, Option.Some{value: X}], to: Declaration(Option) }
     if (isOptionDeclaration(toAst) && fromAst && fromAst._tag === "Union") {
       for (const memberAst of fromAst.types) {
         // Skip null/undefined literals
@@ -721,6 +736,26 @@ export function toGraphQLInputTypeWithRegistry(
           if (transformedInputName) {
             const result = inputRegistry.get(transformedInputName)
             if (result) return result
+          }
+        }
+        // Check for Option.Some pattern - TypeLiteral with 'value' field containing the wrapped type
+        if (memberAst._tag === "TypeLiteral") {
+          const valueField = (memberAst as any).propertySignatures?.find(
+            (p: any) => String(p.name) === "value"
+          )
+          if (valueField) {
+            // Recursively resolve the value type
+            const innerResult = toGraphQLInputTypeWithRegistry(
+              S.make(valueField.type),
+              enumRegistry,
+              inputRegistry,
+              inputs,
+              enums,
+              cache
+            )
+            if (innerResult) {
+              return innerResult
+            }
           }
         }
       }
@@ -780,6 +815,27 @@ export function toGraphQLInputTypeWithRegistry(
         if (transformedInputName) {
           const result = inputRegistry.get(transformedInputName)
           if (result) return result
+        }
+      }
+      // Check for Option.Some pattern - TypeLiteral with a 'value' field containing the wrapped type
+      if (memberAst._tag === "TypeLiteral") {
+        const valueField = (memberAst as any).propertySignatures?.find(
+          (p: any) => String(p.name) === "value"
+        )
+        if (valueField) {
+          // Recursively resolve the value type - this handles transformations, nested options, etc.
+          const innerResult = toGraphQLInputTypeWithRegistry(
+            S.make(valueField.type),
+            enumRegistry,
+            inputRegistry,
+            inputs,
+            enums,
+            cache
+          )
+          // Return if we found a registered type
+          if (innerResult) {
+            return innerResult
+          }
         }
       }
     }
