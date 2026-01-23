@@ -88,6 +88,17 @@ export function buildReverseLookups(ctx: TypeConversionContext): void {
     for (const [typeName, typeReg] of ctx.types) {
       ctx.schemaToTypeName.set(typeReg.schema, typeName)
       ctx.astToTypeName.set(typeReg.schema.ast, typeName)
+
+      // Also add unwrapped AST forms for transformation schemas
+      let ast = typeReg.schema.ast as any
+      while (ast._tag === "Transformation") {
+        ast = ast.to
+        ctx.astToTypeName.set(ast, typeName)
+      }
+      // If we hit a Declaration, also add its typeParameters[0]
+      if (ast._tag === "Declaration" && ast.typeParameters?.[0]) {
+        ctx.astToTypeName.set(ast.typeParameters[0], typeName)
+      }
     }
   }
 
@@ -98,6 +109,17 @@ export function buildReverseLookups(ctx: TypeConversionContext): void {
     for (const [interfaceName, interfaceReg] of ctx.interfaces) {
       ctx.schemaToInterfaceName.set(interfaceReg.schema, interfaceName)
       ctx.astToInterfaceName.set(interfaceReg.schema.ast, interfaceName)
+
+      // Also add unwrapped AST forms for transformation schemas
+      let ast = interfaceReg.schema.ast as any
+      while (ast._tag === "Transformation") {
+        ast = ast.to
+        ctx.astToInterfaceName.set(ast, interfaceName)
+      }
+      // If we hit a Declaration, also add its typeParameters[0]
+      if (ast._tag === "Declaration" && ast.typeParameters?.[0]) {
+        ctx.astToInterfaceName.set(ast.typeParameters[0], interfaceName)
+      }
     }
   }
 
@@ -108,6 +130,17 @@ export function buildReverseLookups(ctx: TypeConversionContext): void {
     for (const [inputName, inputReg] of ctx.inputs) {
       ctx.schemaToInputName.set(inputReg.schema, inputName)
       ctx.astToInputName.set(inputReg.schema.ast, inputName)
+
+      // Also add unwrapped AST forms for transformation schemas
+      let ast = inputReg.schema.ast as any
+      while (ast._tag === "Transformation") {
+        ast = ast.to
+        ctx.astToInputName.set(ast, inputName)
+      }
+      // If we hit a Declaration, also add its typeParameters[0]
+      if (ast._tag === "Declaration" && ast.typeParameters?.[0]) {
+        ctx.astToInputName.set(ast.typeParameters[0], inputName)
+      }
     }
   }
 
@@ -606,6 +639,18 @@ export function buildInputTypeLookupCache(
   for (const [inputName, inputReg] of inputs) {
     cache.schemaToInputName!.set(inputReg.schema, inputName)
     cache.astToInputName!.set(inputReg.schema.ast, inputName)
+
+    // Also add unwrapped AST forms for transformation schemas
+    // This ensures lookups work when encountering unwrapped AST levels
+    let ast = inputReg.schema.ast as any
+    while (ast._tag === "Transformation") {
+      ast = ast.to
+      cache.astToInputName!.set(ast, inputName)
+    }
+    // If we hit a Declaration, also add its typeParameters[0]
+    if (ast._tag === "Declaration" && ast.typeParameters?.[0]) {
+      cache.astToInputName!.set(ast.typeParameters[0], inputName)
+    }
   }
 
   // Build enum lookups
