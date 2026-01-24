@@ -823,18 +823,35 @@ export function toGraphQLInputTypeWithRegistry(
         if (memberAst._tag === "Literal") continue
         if (memberAst._tag === "UndefinedKeyword") continue
 
-        // Check cache first for O(1) lookup
+        // Check cache first for O(1) lookup, then recursively process the registered schema
         const inputName = cache?.astToInputName?.get(memberAst)
         if (inputName) {
-          const result = inputRegistry.get(inputName)
-          if (result) return result
+          const inputReg = inputs.get(inputName)
+          if (inputReg) {
+            // Recursively process to ensure it gets generated with the registered name
+            return toGraphQLInputTypeWithRegistry(
+              inputReg.schema,
+              enumRegistry,
+              inputRegistry,
+              inputs,
+              enums,
+              cache
+            )
+          }
         }
 
         // Fallback: Linear scan to check if memberAst matches any registered input
-        for (const [regInputName, inputReg] of inputs) {
+        for (const [, inputReg] of inputs) {
           if (inputReg.schema.ast === memberAst) {
-            const result = inputRegistry.get(regInputName)
-            if (result) return result
+            // Recursively process to ensure it gets generated with the registered name
+            return toGraphQLInputTypeWithRegistry(
+              inputReg.schema,
+              enumRegistry,
+              inputRegistry,
+              inputs,
+              enums,
+              cache
+            )
           }
         }
 
@@ -843,14 +860,29 @@ export function toGraphQLInputTypeWithRegistry(
           const innerToAst = memberAst.to
           const transformedInputName = cache?.astToInputName?.get(innerToAst)
           if (transformedInputName) {
-            const result = inputRegistry.get(transformedInputName)
-            if (result) return result
+            const inputReg = inputs.get(transformedInputName)
+            if (inputReg) {
+              return toGraphQLInputTypeWithRegistry(
+                inputReg.schema,
+                enumRegistry,
+                inputRegistry,
+                inputs,
+                enums,
+                cache
+              )
+            }
           }
           // Fallback: Linear scan for transformation's inner AST
-          for (const [regInputName, inputReg] of inputs) {
+          for (const [, inputReg] of inputs) {
             if (inputReg.schema.ast === innerToAst) {
-              const result = inputRegistry.get(regInputName)
-              if (result) return result
+              return toGraphQLInputTypeWithRegistry(
+                inputReg.schema,
+                enumRegistry,
+                inputRegistry,
+                inputs,
+                enums,
+                cache
+              )
             }
           }
         }
@@ -866,28 +898,55 @@ export function toGraphQLInputTypeWithRegistry(
             // Check cache first for the value type
             const valueInputName = cache?.astToInputName?.get(valueType)
             if (valueInputName) {
-              const result = inputRegistry.get(valueInputName)
-              if (result) return result
+              const inputReg = inputs.get(valueInputName)
+              if (inputReg) {
+                return toGraphQLInputTypeWithRegistry(
+                  inputReg.schema,
+                  enumRegistry,
+                  inputRegistry,
+                  inputs,
+                  enums,
+                  cache
+                )
+              }
             }
 
             // Fallback: Linear scan to check if valueType matches any registered input
-            for (const [regInputName, inputReg] of inputs) {
+            for (const [, inputReg] of inputs) {
               if (inputReg.schema.ast === valueType) {
-                const result = inputRegistry.get(regInputName)
-                if (result) return result
+                return toGraphQLInputTypeWithRegistry(
+                  inputReg.schema,
+                  enumRegistry,
+                  inputRegistry,
+                  inputs,
+                  enums,
+                  cache
+                )
               }
               // Also check unwrapped forms of registered schema
               let regAst = inputReg.schema.ast as any
               while (regAst._tag === "Transformation") {
                 regAst = regAst.to
                 if (regAst === valueType) {
-                  const result = inputRegistry.get(regInputName)
-                  if (result) return result
+                  return toGraphQLInputTypeWithRegistry(
+                    inputReg.schema,
+                    enumRegistry,
+                    inputRegistry,
+                    inputs,
+                    enums,
+                    cache
+                  )
                 }
               }
               if (regAst._tag === "Declaration" && regAst.typeParameters?.[0] === valueType) {
-                const result = inputRegistry.get(regInputName)
-                if (result) return result
+                return toGraphQLInputTypeWithRegistry(
+                  inputReg.schema,
+                  enumRegistry,
+                  inputRegistry,
+                  inputs,
+                  enums,
+                  cache
+                )
               }
             }
 
@@ -950,18 +1009,33 @@ export function toGraphQLInputTypeWithRegistry(
     // Check if any union member is a registered input type (handles S.Option(RegisteredInput))
     // S.Option/S.OptionFromNullOr wraps the type inside a Union in the 'from' position
     for (const memberAst of unionAst.types) {
-      // Check cache first for O(1) lookup
+      // Check cache first for O(1) lookup, then recursively process the registered schema
       const inputName = cache?.astToInputName?.get(memberAst)
       if (inputName) {
-        const result = inputRegistry.get(inputName)
-        if (result) return result
+        const inputReg = inputs.get(inputName)
+        if (inputReg) {
+          return toGraphQLInputTypeWithRegistry(
+            inputReg.schema,
+            enumRegistry,
+            inputRegistry,
+            inputs,
+            enums,
+            cache
+          )
+        }
       }
 
       // Fallback: Linear scan to check if memberAst matches any registered input
-      for (const [regInputName, inputReg] of inputs) {
+      for (const [, inputReg] of inputs) {
         if (inputReg.schema.ast === memberAst) {
-          const result = inputRegistry.get(regInputName)
-          if (result) return result
+          return toGraphQLInputTypeWithRegistry(
+            inputReg.schema,
+            enumRegistry,
+            inputRegistry,
+            inputs,
+            enums,
+            cache
+          )
         }
       }
 
@@ -970,14 +1044,29 @@ export function toGraphQLInputTypeWithRegistry(
         const toAst = memberAst.to
         const transformedInputName = cache?.astToInputName?.get(toAst)
         if (transformedInputName) {
-          const result = inputRegistry.get(transformedInputName)
-          if (result) return result
+          const inputReg = inputs.get(transformedInputName)
+          if (inputReg) {
+            return toGraphQLInputTypeWithRegistry(
+              inputReg.schema,
+              enumRegistry,
+              inputRegistry,
+              inputs,
+              enums,
+              cache
+            )
+          }
         }
         // Fallback: Linear scan for transformation's inner AST
-        for (const [regInputName, inputReg] of inputs) {
+        for (const [, inputReg] of inputs) {
           if (inputReg.schema.ast === toAst) {
-            const result = inputRegistry.get(regInputName)
-            if (result) return result
+            return toGraphQLInputTypeWithRegistry(
+              inputReg.schema,
+              enumRegistry,
+              inputRegistry,
+              inputs,
+              enums,
+              cache
+            )
           }
         }
       }
@@ -993,28 +1082,55 @@ export function toGraphQLInputTypeWithRegistry(
           // Check cache first for the value type
           const valueInputName = cache?.astToInputName?.get(valueType)
           if (valueInputName) {
-            const result = inputRegistry.get(valueInputName)
-            if (result) return result
+            const inputReg = inputs.get(valueInputName)
+            if (inputReg) {
+              return toGraphQLInputTypeWithRegistry(
+                inputReg.schema,
+                enumRegistry,
+                inputRegistry,
+                inputs,
+                enums,
+                cache
+              )
+            }
           }
 
           // Fallback: Linear scan to check if valueType matches any registered input
-          for (const [regInputName, inputReg] of inputs) {
+          for (const [, inputReg] of inputs) {
             if (inputReg.schema.ast === valueType) {
-              const result = inputRegistry.get(regInputName)
-              if (result) return result
+              return toGraphQLInputTypeWithRegistry(
+                inputReg.schema,
+                enumRegistry,
+                inputRegistry,
+                inputs,
+                enums,
+                cache
+              )
             }
             // Also check unwrapped forms of registered schema
             let regAst = inputReg.schema.ast as any
             while (regAst._tag === "Transformation") {
               regAst = regAst.to
               if (regAst === valueType) {
-                const result = inputRegistry.get(regInputName)
-                if (result) return result
+                return toGraphQLInputTypeWithRegistry(
+                  inputReg.schema,
+                  enumRegistry,
+                  inputRegistry,
+                  inputs,
+                  enums,
+                  cache
+                )
               }
             }
             if (regAst._tag === "Declaration" && regAst.typeParameters?.[0] === valueType) {
-              const result = inputRegistry.get(regInputName)
-              if (result) return result
+              return toGraphQLInputTypeWithRegistry(
+                inputReg.schema,
+                enumRegistry,
+                inputRegistry,
+                inputs,
+                enums,
+                cache
+              )
             }
           }
 

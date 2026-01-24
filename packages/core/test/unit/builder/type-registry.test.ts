@@ -1106,6 +1106,282 @@ describe("type-registry.ts", () => {
   })
 
   // ==========================================================================
+  // Bug fixes - S.Option(TransformationSchema) in args
+  // ==========================================================================
+  describe("Bug fixes - S.Option(TransformationSchema) in args", () => {
+    it("should find registered input when using S.Option(Schema.Class) in args - with cache", () => {
+      // Simulates: S.Option(CursorFromHex) where CursorFromHex is a Schema.Class
+      class CursorFromHex extends S.Class<CursorFromHex>("CursorFromHex")({
+        value: S.String,
+      }) {}
+
+      const cursorInputType = new GraphQLInputObjectType({
+        name: "CursorInput",
+        fields: { value: { type: GraphQLString } },
+      })
+
+      const inputRegistry = new Map<string, GraphQLInputObjectType>()
+      inputRegistry.set("CursorInput", cursorInputType)
+
+      const inputs = new Map()
+      inputs.set("CursorInput", { name: "CursorInput", schema: CursorFromHex })
+
+      const cache = buildInputTypeLookupCache(inputs, new Map())
+
+      // Use S.Option(CursorFromHex) - this is the problematic case
+      const OptionalCursorSchema = S.Option(CursorFromHex)
+
+      const result = toGraphQLInputTypeWithRegistry(
+        OptionalCursorSchema,
+        new Map(),
+        inputRegistry,
+        inputs,
+        new Map(),
+        cache
+      )
+
+      expect(result).toBe(cursorInputType)
+    })
+
+    it("should find registered input when using S.Option(Schema.Class) in args - WITHOUT cache", () => {
+      // Same test but without cache - tests the fallback linear scan
+      class CursorFromHex extends S.Class<CursorFromHex>("CursorFromHex")({
+        value: S.String,
+      }) {}
+
+      const cursorInputType = new GraphQLInputObjectType({
+        name: "CursorInput",
+        fields: { value: { type: GraphQLString } },
+      })
+
+      const inputRegistry = new Map<string, GraphQLInputObjectType>()
+      inputRegistry.set("CursorInput", cursorInputType)
+
+      const inputs = new Map()
+      inputs.set("CursorInput", { name: "CursorInput", schema: CursorFromHex })
+
+      // NO cache passed - tests fallback linear scan
+      const OptionalCursorSchema = S.Option(CursorFromHex)
+
+      const result = toGraphQLInputTypeWithRegistry(
+        OptionalCursorSchema,
+        new Map(),
+        inputRegistry,
+        inputs,
+        new Map()
+        // No cache parameter
+      )
+
+      expect(result).toBe(cursorInputType)
+    })
+
+    it("should find registered input when using S.OptionFromNullOr(Schema.Class) in args - WITHOUT cache", () => {
+      class CursorFromHex extends S.Class<CursorFromHex>("CursorFromHex")({
+        value: S.String,
+      }) {}
+
+      const cursorInputType = new GraphQLInputObjectType({
+        name: "CursorInput",
+        fields: { value: { type: GraphQLString } },
+      })
+
+      const inputRegistry = new Map<string, GraphQLInputObjectType>()
+      inputRegistry.set("CursorInput", cursorInputType)
+
+      const inputs = new Map()
+      inputs.set("CursorInput", { name: "CursorInput", schema: CursorFromHex })
+
+      // Use S.OptionFromNullOr - another common pattern
+      const OptionalCursorSchema = S.OptionFromNullOr(CursorFromHex)
+
+      const result = toGraphQLInputTypeWithRegistry(
+        OptionalCursorSchema,
+        new Map(),
+        inputRegistry,
+        inputs,
+        new Map()
+        // No cache parameter
+      )
+
+      expect(result).toBe(cursorInputType)
+    })
+
+    it("should find registered branded/transformed input in S.Option - WITHOUT cache", () => {
+      // Simulates a branded type like CursorFromHex which is S.String.pipe(S.brand("Cursor"))
+      const CursorFromHex = S.String.pipe(S.brand("Cursor"))
+
+      const cursorInputType = new GraphQLInputObjectType({
+        name: "CursorInput",
+        fields: { value: { type: GraphQLString } },
+      })
+
+      const inputRegistry = new Map<string, GraphQLInputObjectType>()
+      inputRegistry.set("CursorInput", cursorInputType)
+
+      const inputs = new Map()
+      inputs.set("CursorInput", { name: "CursorInput", schema: CursorFromHex })
+
+      const OptionalCursorSchema = S.Option(CursorFromHex)
+
+      const result = toGraphQLInputTypeWithRegistry(
+        OptionalCursorSchema,
+        new Map(),
+        inputRegistry,
+        inputs,
+        new Map()
+      )
+
+      expect(result).toBe(cursorInputType)
+    })
+
+    it("should find registered input in args struct containing S.optional(RegisteredType) - WITHOUT cache", () => {
+      // This tests the full args scenario: S.Struct({ cursor: S.optional(CursorFromHex) })
+      class CursorFromHex extends S.Class<CursorFromHex>("CursorFromHex")({
+        value: S.String,
+      }) {}
+
+      const cursorInputType = new GraphQLInputObjectType({
+        name: "CursorInput",
+        fields: { value: { type: GraphQLString } },
+      })
+
+      const inputRegistry = new Map<string, GraphQLInputObjectType>()
+      inputRegistry.set("CursorInput", cursorInputType)
+
+      const inputs = new Map()
+      inputs.set("CursorInput", { name: "CursorInput", schema: CursorFromHex })
+
+      // Args schema with optional cursor (using S.optional which creates Union[Type, UndefinedKeyword])
+      const ArgsSchema = S.Struct({
+        limit: S.Int,
+        cursor: S.optional(CursorFromHex),
+      })
+
+      const args = toGraphQLArgsWithRegistry(
+        ArgsSchema,
+        new Map(),
+        inputRegistry,
+        inputs,
+        new Map()
+        // No cache parameter
+      )
+
+      expect(args.limit).toBeDefined()
+      expect(args.cursor).toBeDefined()
+      // The cursor type should be the registered CursorInput (nullable since it's optional)
+      expect(args.cursor.type).toBe(cursorInputType)
+    })
+
+    it("DEBUG: inspect S.OptionFromSelf AST structure", () => {
+      // Debug test to understand S.OptionFromSelf structure
+      class CursorFromHex extends S.Class<CursorFromHex>("CursorFromHex")({
+        value: S.String,
+      }) {}
+
+      const OptionalCursor = S.OptionFromSelf(CursorFromHex)
+      const ast = OptionalCursor.ast as any
+
+      console.log("S.OptionFromSelf AST structure:")
+      console.log("ast._tag:", ast._tag)
+      
+      if (ast._tag === "Declaration") {
+        console.log("It's a Declaration (not Transformation)")
+        console.log("ast.typeParameters count:", ast.typeParameters?.length)
+        if (ast.typeParameters?.[0]) {
+          console.log("typeParameters[0]._tag:", ast.typeParameters[0]._tag)
+          console.log("typeParameters[0] === CursorFromHex.ast:", ast.typeParameters[0] === CursorFromHex.ast)
+        }
+      } else if (ast._tag === "Transformation") {
+        console.log("ast.from._tag:", ast.from?._tag)
+        console.log("ast.to._tag:", ast.to?._tag)
+      }
+
+      // Verify it's a Declaration (Option declaration)
+      expect(ast._tag).toBe("Declaration")
+    })
+
+    it("DEBUG: inspect S.optional inside Struct AST structure", () => {
+      // Debug test to understand how S.optional works inside a Struct
+      class CursorFromHex extends S.Class<CursorFromHex>("CursorFromHex")({
+        value: S.String,
+      }) {}
+
+      // S.optional is used inside a Struct to create optional fields
+      const Schema = S.Struct({
+        cursor: S.optional(CursorFromHex),
+      })
+      const ast = Schema.ast as any
+
+      console.log("S.Struct with S.optional AST structure:")
+      console.log("ast._tag:", ast._tag)
+      
+      if (ast._tag === "TypeLiteral") {
+        const cursorProp = ast.propertySignatures?.find((p: any) => String(p.name) === "cursor")
+        if (cursorProp) {
+          console.log("cursor.isOptional:", cursorProp.isOptional)
+          console.log("cursor.type._tag:", cursorProp.type._tag)
+          if (cursorProp.type._tag === "Union") {
+            console.log("cursor.type.types count:", cursorProp.type.types?.length)
+            for (let i = 0; i < cursorProp.type.types?.length; i++) {
+              const memberType = cursorProp.type.types[i]
+              console.log(`  type[${i}]._tag:`, memberType._tag)
+              console.log(`  type[${i}] === CursorFromHex.ast:`, memberType === CursorFromHex.ast)
+            }
+          }
+        }
+      }
+
+      expect(ast._tag).toBe("TypeLiteral")
+    })
+
+    it("DEBUG: inspect S.Option AST structure", () => {
+      // Debug test to understand the AST structure
+      class CursorFromHex extends S.Class<CursorFromHex>("CursorFromHex")({
+        value: S.String,
+      }) {}
+
+      const OptionalCursor = S.Option(CursorFromHex)
+      const ast = OptionalCursor.ast as any
+
+      // Log the structure for debugging
+      console.log("S.Option AST structure:")
+      console.log("ast._tag:", ast._tag)
+      
+      if (ast._tag === "Transformation") {
+        console.log("ast.from._tag:", ast.from?._tag)
+        console.log("ast.to._tag:", ast.to?._tag)
+        
+        if (ast.from?._tag === "Union") {
+          console.log("ast.from.types count:", ast.from.types?.length)
+          for (let i = 0; i < ast.from.types?.length; i++) {
+            const memberAst = ast.from.types[i]
+            console.log(`  member[${i}]._tag:`, memberAst._tag)
+            if (memberAst._tag === "TypeLiteral") {
+              const props = memberAst.propertySignatures?.map((p: any) => String(p.name))
+              console.log(`  member[${i}].properties:`, props)
+              const valueField = memberAst.propertySignatures?.find((p: any) => String(p.name) === "value")
+              if (valueField) {
+                console.log(`  member[${i}].value.type._tag:`, valueField.type?._tag)
+                console.log(`  member[${i}].value.type === CursorFromHex.ast:`, valueField.type === CursorFromHex.ast)
+                // Check unwrapped forms
+                let unwrapped = CursorFromHex.ast as any
+                while (unwrapped._tag === "Transformation") {
+                  console.log(`  CursorFromHex unwrapped to:`, unwrapped.to?._tag)
+                  unwrapped = unwrapped.to
+                }
+                console.log(`  member[${i}].value.type === unwrapped CursorFromHex:`, valueField.type === unwrapped)
+              }
+            }
+          }
+        }
+      }
+
+      // The test itself - just verify it's a Transformation
+      expect(ast._tag).toBe("Transformation")
+    })
+  })
+
+  // ==========================================================================
   // _tag field filtering
   // ==========================================================================
   describe("_tag field filtering", () => {
