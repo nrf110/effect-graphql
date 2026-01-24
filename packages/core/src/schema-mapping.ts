@@ -24,13 +24,23 @@ const isIntegerType = (ast: AST.AST): boolean => {
   if (ast._tag === "Refinement") {
     const refinement = ast as any
 
-    // S.Int uses a filter with a specific predicate
-    // Check the annotations for the integer identifier
+    // Check the annotations for the integer identifier or JSONSchema type
     const annotations = refinement.annotations
     if (annotations) {
-      // Check for identifier annotation
+      // Check for identifier annotation (Int, NonNegativeInt, PositiveInt, etc.)
       const identifier = AST.getIdentifierAnnotation(refinement)
-      if (identifier._tag === "Some" && identifier.value === "Int") {
+      if (identifier._tag === "Some") {
+        const id = identifier.value
+        // Check for any integer-related identifier
+        if (id === "Int" || id.includes("Int")) {
+          return true
+        }
+      }
+
+      // Check for JSONSchema annotation with type "integer"
+      const JSONSchemaSymbol = Symbol.for("effect/annotation/JSONSchema")
+      const jsonSchema = annotations[JSONSchemaSymbol]
+      if (jsonSchema && jsonSchema.type === "integer") {
         return true
       }
     }
@@ -136,8 +146,10 @@ export const toGraphQLType = (schema: S.Schema<any, any, any>): GraphQLOutputTyp
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLType(fieldSchema)
 
-      // Make non-optional fields non-null
-      if (!field.isOptional) {
+      // Make non-optional fields non-null, unless they're Option transformations
+      // Option transformations (like S.OptionFromNullOr) should always be nullable
+      const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
+      if (!field.isOptional && !isOptionField) {
         fieldType = new GraphQLNonNull(fieldType)
       }
 
@@ -254,8 +266,10 @@ export const toGraphQLInputType = (schema: S.Schema<any, any, any>): GraphQLInpu
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLInputType(fieldSchema)
 
-      // Make non-optional fields non-null
-      if (!field.isOptional) {
+      // Make non-optional fields non-null, unless they're Option transformations
+      // Option transformations (like S.OptionFromNullOr) should always be nullable
+      const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
+      if (!field.isOptional && !isOptionField) {
         fieldType = new GraphQLNonNull(fieldType)
       }
 
@@ -371,8 +385,10 @@ export const toGraphQLObjectType = <T>(
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLType(fieldSchema)
 
-      // Make non-optional fields non-null
-      if (!field.isOptional) {
+      // Make non-optional fields non-null, unless they're Option transformations
+      // Option transformations (like S.OptionFromNullOr) should always be nullable
+      const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
+      if (!field.isOptional && !isOptionField) {
         fieldType = new GraphQLNonNull(fieldType)
       }
 
@@ -419,8 +435,10 @@ export const toGraphQLArgs = (schema: S.Schema<any, any, any>): GraphQLFieldConf
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLInputType(fieldSchema)
 
-      // Make non-optional fields non-null
-      if (!field.isOptional) {
+      // Make non-optional fields non-null, unless they're Option transformations
+      // Option transformations (like S.OptionFromNullOr) should always be nullable
+      const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
+      if (!field.isOptional && !isOptionField) {
         fieldType = new GraphQLNonNull(fieldType)
       }
 
