@@ -332,11 +332,21 @@ function handleTransformationAST(ast: any, ctx: TypeConversionContext): any {
         if (memberAst._tag === "Literal") continue
         if (memberAst._tag === "UndefinedKeyword") continue
 
+        // Check cache first for O(1) lookup
         const typeName = ctx.astToTypeName?.get(memberAst)
         if (typeName) {
           const result = ctx.typeRegistry.get(typeName)
           if (result) return result
         }
+
+        // Fallback: Linear scan to check if memberAst matches any registered type
+        for (const [regTypeName, typeReg] of ctx.types) {
+          if (typeReg.schema.ast === memberAst) {
+            const result = ctx.typeRegistry.get(regTypeName)
+            if (result) return result
+          }
+        }
+
         // Check for transformations wrapping registered types
         if (memberAst._tag === "Transformation") {
           const innerToAst = memberAst.to
@@ -344,6 +354,51 @@ function handleTransformationAST(ast: any, ctx: TypeConversionContext): any {
           if (transformedTypeName) {
             const result = ctx.typeRegistry.get(transformedTypeName)
             if (result) return result
+          }
+          // Fallback: Linear scan for transformation's inner AST
+          for (const [regTypeName, typeReg] of ctx.types) {
+            if (typeReg.schema.ast === innerToAst) {
+              const result = ctx.typeRegistry.get(regTypeName)
+              if (result) return result
+            }
+          }
+        }
+
+        // Check for Option.Some pattern - TypeLiteral with 'value' field
+        if (memberAst._tag === "TypeLiteral") {
+          const valueField = memberAst.propertySignatures?.find(
+            (p: any) => String(p.name) === "value"
+          )
+          if (valueField) {
+            const valueType = valueField.type
+
+            // Check cache first
+            const valueTypeName = ctx.astToTypeName?.get(valueType)
+            if (valueTypeName) {
+              const result = ctx.typeRegistry.get(valueTypeName)
+              if (result) return result
+            }
+
+            // Fallback: Linear scan for value type
+            for (const [regTypeName, typeReg] of ctx.types) {
+              if (typeReg.schema.ast === valueType) {
+                const result = ctx.typeRegistry.get(regTypeName)
+                if (result) return result
+              }
+              // Also check unwrapped forms
+              let regAst = typeReg.schema.ast as any
+              while (regAst._tag === "Transformation") {
+                regAst = regAst.to
+                if (regAst === valueType) {
+                  const result = ctx.typeRegistry.get(regTypeName)
+                  if (result) return result
+                }
+              }
+            }
+
+            // Recursively resolve the value type
+            const innerResult = toGraphQLTypeWithRegistry(S.make(valueType), ctx)
+            if (innerResult) return innerResult
           }
         }
       }
@@ -393,11 +448,21 @@ function handleUnionAST(ast: any, ctx: TypeConversionContext): any {
   // Check if any union member is a registered type (handles S.Option(RegisteredType))
   // S.Option/S.OptionFromNullOr wraps the type inside a Union in the 'from' position
   for (const memberAst of ast.types) {
+    // Check cache first for O(1) lookup
     const typeName = ctx.astToTypeName?.get(memberAst)
     if (typeName) {
       const result = ctx.typeRegistry.get(typeName)
       if (result) return result
     }
+
+    // Fallback: Linear scan to check if memberAst matches any registered type
+    for (const [regTypeName, typeReg] of ctx.types) {
+      if (typeReg.schema.ast === memberAst) {
+        const result = ctx.typeRegistry.get(regTypeName)
+        if (result) return result
+      }
+    }
+
     // Also check for transformations wrapping registered types
     if (memberAst._tag === "Transformation") {
       const toAst = memberAst.to
@@ -406,15 +471,49 @@ function handleUnionAST(ast: any, ctx: TypeConversionContext): any {
         const result = ctx.typeRegistry.get(transformedTypeName)
         if (result) return result
       }
+      // Fallback: Linear scan for transformation's inner AST
+      for (const [regTypeName, typeReg] of ctx.types) {
+        if (typeReg.schema.ast === toAst) {
+          const result = ctx.typeRegistry.get(regTypeName)
+          if (result) return result
+        }
+      }
     }
+
     // Check for Option.Some pattern - TypeLiteral with a 'value' field containing the wrapped type
     if (memberAst._tag === "TypeLiteral") {
       const valueField = memberAst.propertySignatures?.find(
         (p: any) => String(p.name) === "value"
       )
       if (valueField) {
+        const valueType = valueField.type
+
+        // Check cache first
+        const valueTypeName = ctx.astToTypeName?.get(valueType)
+        if (valueTypeName) {
+          const result = ctx.typeRegistry.get(valueTypeName)
+          if (result) return result
+        }
+
+        // Fallback: Linear scan for value type
+        for (const [regTypeName, typeReg] of ctx.types) {
+          if (typeReg.schema.ast === valueType) {
+            const result = ctx.typeRegistry.get(regTypeName)
+            if (result) return result
+          }
+          // Also check unwrapped forms
+          let regAst = typeReg.schema.ast as any
+          while (regAst._tag === "Transformation") {
+            regAst = regAst.to
+            if (regAst === valueType) {
+              const result = ctx.typeRegistry.get(regTypeName)
+              if (result) return result
+            }
+          }
+        }
+
         // Recursively resolve the value type - this handles transformations, nested options, etc.
-        const innerResult = toGraphQLTypeWithRegistry(S.make(valueField.type), ctx)
+        const innerResult = toGraphQLTypeWithRegistry(S.make(valueType), ctx)
         // Return if we found a registered type (has a proper name, not auto-generated)
         if (innerResult) {
           return innerResult
@@ -724,11 +823,21 @@ export function toGraphQLInputTypeWithRegistry(
         if (memberAst._tag === "Literal") continue
         if (memberAst._tag === "UndefinedKeyword") continue
 
+        // Check cache first for O(1) lookup
         const inputName = cache?.astToInputName?.get(memberAst)
         if (inputName) {
           const result = inputRegistry.get(inputName)
           if (result) return result
         }
+
+        // Fallback: Linear scan to check if memberAst matches any registered input
+        for (const [regInputName, inputReg] of inputs) {
+          if (inputReg.schema.ast === memberAst) {
+            const result = inputRegistry.get(regInputName)
+            if (result) return result
+          }
+        }
+
         // Check for transformations wrapping registered input types
         if (memberAst._tag === "Transformation") {
           const innerToAst = memberAst.to
@@ -737,16 +846,54 @@ export function toGraphQLInputTypeWithRegistry(
             const result = inputRegistry.get(transformedInputName)
             if (result) return result
           }
+          // Fallback: Linear scan for transformation's inner AST
+          for (const [regInputName, inputReg] of inputs) {
+            if (inputReg.schema.ast === innerToAst) {
+              const result = inputRegistry.get(regInputName)
+              if (result) return result
+            }
+          }
         }
+
         // Check for Option.Some pattern - TypeLiteral with 'value' field containing the wrapped type
         if (memberAst._tag === "TypeLiteral") {
           const valueField = (memberAst as any).propertySignatures?.find(
             (p: any) => String(p.name) === "value"
           )
           if (valueField) {
-            // Recursively resolve the value type
+            const valueType = valueField.type
+
+            // Check cache first for the value type
+            const valueInputName = cache?.astToInputName?.get(valueType)
+            if (valueInputName) {
+              const result = inputRegistry.get(valueInputName)
+              if (result) return result
+            }
+
+            // Fallback: Linear scan to check if valueType matches any registered input
+            for (const [regInputName, inputReg] of inputs) {
+              if (inputReg.schema.ast === valueType) {
+                const result = inputRegistry.get(regInputName)
+                if (result) return result
+              }
+              // Also check unwrapped forms of registered schema
+              let regAst = inputReg.schema.ast as any
+              while (regAst._tag === "Transformation") {
+                regAst = regAst.to
+                if (regAst === valueType) {
+                  const result = inputRegistry.get(regInputName)
+                  if (result) return result
+                }
+              }
+              if (regAst._tag === "Declaration" && regAst.typeParameters?.[0] === valueType) {
+                const result = inputRegistry.get(regInputName)
+                if (result) return result
+              }
+            }
+
+            // Recursively resolve the value type if no direct match found
             const innerResult = toGraphQLInputTypeWithRegistry(
-              S.make(valueField.type),
+              S.make(valueType),
               enumRegistry,
               inputRegistry,
               inputs,
@@ -803,11 +950,21 @@ export function toGraphQLInputTypeWithRegistry(
     // Check if any union member is a registered input type (handles S.Option(RegisteredInput))
     // S.Option/S.OptionFromNullOr wraps the type inside a Union in the 'from' position
     for (const memberAst of unionAst.types) {
+      // Check cache first for O(1) lookup
       const inputName = cache?.astToInputName?.get(memberAst)
       if (inputName) {
         const result = inputRegistry.get(inputName)
         if (result) return result
       }
+
+      // Fallback: Linear scan to check if memberAst matches any registered input
+      for (const [regInputName, inputReg] of inputs) {
+        if (inputReg.schema.ast === memberAst) {
+          const result = inputRegistry.get(regInputName)
+          if (result) return result
+        }
+      }
+
       // Also check for transformations wrapping registered input types
       if (memberAst._tag === "Transformation") {
         const toAst = memberAst.to
@@ -816,16 +973,54 @@ export function toGraphQLInputTypeWithRegistry(
           const result = inputRegistry.get(transformedInputName)
           if (result) return result
         }
+        // Fallback: Linear scan for transformation's inner AST
+        for (const [regInputName, inputReg] of inputs) {
+          if (inputReg.schema.ast === toAst) {
+            const result = inputRegistry.get(regInputName)
+            if (result) return result
+          }
+        }
       }
+
       // Check for Option.Some pattern - TypeLiteral with a 'value' field containing the wrapped type
       if (memberAst._tag === "TypeLiteral") {
         const valueField = (memberAst as any).propertySignatures?.find(
           (p: any) => String(p.name) === "value"
         )
         if (valueField) {
-          // Recursively resolve the value type - this handles transformations, nested options, etc.
+          const valueType = valueField.type
+
+          // Check cache first for the value type
+          const valueInputName = cache?.astToInputName?.get(valueType)
+          if (valueInputName) {
+            const result = inputRegistry.get(valueInputName)
+            if (result) return result
+          }
+
+          // Fallback: Linear scan to check if valueType matches any registered input
+          for (const [regInputName, inputReg] of inputs) {
+            if (inputReg.schema.ast === valueType) {
+              const result = inputRegistry.get(regInputName)
+              if (result) return result
+            }
+            // Also check unwrapped forms of registered schema
+            let regAst = inputReg.schema.ast as any
+            while (regAst._tag === "Transformation") {
+              regAst = regAst.to
+              if (regAst === valueType) {
+                const result = inputRegistry.get(regInputName)
+                if (result) return result
+              }
+            }
+            if (regAst._tag === "Declaration" && regAst.typeParameters?.[0] === valueType) {
+              const result = inputRegistry.get(regInputName)
+              if (result) return result
+            }
+          }
+
+          // Recursively resolve the value type if no direct match found
           const innerResult = toGraphQLInputTypeWithRegistry(
-            S.make(valueField.type),
+            S.make(valueType),
             enumRegistry,
             inputRegistry,
             inputs,
