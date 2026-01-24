@@ -314,6 +314,164 @@ function getOptionInnerType(ast: AST.AST): AST.AST | undefined {
 }
 
 /**
+ * Find a registered type for an AST node, checking cache and fallback scans
+ */
+function findRegisteredTypeForAST(
+  memberAst: any,
+  ctx: TypeConversionContext
+): GraphQLObjectType | undefined {
+  // Check cache first for O(1) lookup
+  const typeName = ctx.astToTypeName?.get(memberAst)
+  if (typeName) {
+    const result = ctx.typeRegistry.get(typeName)
+    if (result) return result
+  }
+
+  // Fallback: Linear scan to check if memberAst matches any registered type
+  for (const [regTypeName, typeReg] of ctx.types) {
+    if (typeReg.schema.ast === memberAst) {
+      const result = ctx.typeRegistry.get(regTypeName)
+      if (result) return result
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * Find a registered type for a transformation's inner AST
+ */
+function findRegisteredTypeForTransformation(
+  memberAst: any,
+  ctx: TypeConversionContext
+): GraphQLObjectType | undefined {
+  if (memberAst._tag !== "Transformation") return undefined
+
+  const innerToAst = memberAst.to
+  const transformedTypeName = ctx.astToTypeName?.get(innerToAst)
+  if (transformedTypeName) {
+    const result = ctx.typeRegistry.get(transformedTypeName)
+    if (result) return result
+  }
+
+  // Fallback: Linear scan for transformation's inner AST
+  for (const [regTypeName, typeReg] of ctx.types) {
+    if (typeReg.schema.ast === innerToAst) {
+      const result = ctx.typeRegistry.get(regTypeName)
+      if (result) return result
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * Find a registered type for an Option.Some pattern (TypeLiteral with 'value' field)
+ */
+function findRegisteredTypeForOptionSome(
+  memberAst: any,
+  ctx: TypeConversionContext
+): GraphQLObjectType | undefined {
+  if (memberAst._tag !== "TypeLiteral") return undefined
+
+  const valueField = memberAst.propertySignatures?.find(
+    (p: any) => String(p.name) === "value"
+  )
+  if (!valueField) return undefined
+
+  const valueType = valueField.type
+
+  // Check cache first
+  const valueTypeName = ctx.astToTypeName?.get(valueType)
+  if (valueTypeName) {
+    const result = ctx.typeRegistry.get(valueTypeName)
+    if (result) return result
+  }
+
+  // Fallback: Linear scan for value type
+  for (const [regTypeName, typeReg] of ctx.types) {
+    if (typeReg.schema.ast === valueType) {
+      const result = ctx.typeRegistry.get(regTypeName)
+      if (result) return result
+    }
+    // Also check unwrapped forms
+    let regAst = typeReg.schema.ast as any
+    while (regAst._tag === "Transformation") {
+      regAst = regAst.to
+      if (regAst === valueType) {
+        const result = ctx.typeRegistry.get(regTypeName)
+        if (result) return result
+      }
+    }
+  }
+
+  // Recursively resolve the value type
+  const innerResult = toGraphQLTypeWithRegistry(S.make(valueType), ctx)
+  return innerResult
+}
+
+/**
+ * Handle Option transformation AST nodes (e.g., S.OptionFromNullOr)
+ */
+function handleOptionTransformation(
+  ast: any,
+  fromAst: any,
+  toAst: any,
+  ctx: TypeConversionContext
+): any {
+  // For S.OptionFromNullOr, the wrapped type is in the 'from' Union, not in typeParameters
+  // Structure: Transformation { from: Union[X.ast, Literal], to: Declaration(Option) }
+  if (fromAst && fromAst._tag === "Union") {
+    // Check if any union member is a registered type
+    for (const memberAst of fromAst.types) {
+      // Skip null/undefined literals
+      if (memberAst._tag === "Literal") continue
+      if (memberAst._tag === "UndefinedKeyword") continue
+
+      // Try various strategies to find registered type
+      const registeredType =
+        findRegisteredTypeForAST(memberAst, ctx) ||
+        findRegisteredTypeForTransformation(memberAst, ctx) ||
+        findRegisteredTypeForOptionSome(memberAst, ctx)
+
+      if (registeredType) return registeredType
+    }
+  }
+
+  // Fallback to typeParameters for S.Option(X)
+  const innerType = getOptionInnerType(toAst)
+  if (innerType) {
+    // Return the inner type as nullable (not wrapped in NonNull)
+    return toGraphQLTypeWithRegistry(S.make(innerType), ctx)
+  }
+
+  return undefined
+}
+
+/**
+ * Handle array transformation AST nodes (readonly array on the to side)
+ */
+function handleArrayTransformation(
+  toAst: any,
+  ctx: TypeConversionContext
+): GraphQLList<any> | undefined {
+  if (toAst._tag !== "TupleType") return undefined
+
+  let elementType: any
+  if (toAst.rest && toAst.rest.length > 0) {
+    const elementSchema = S.make(toAst.rest[0].type)
+    elementType = toGraphQLTypeWithRegistry(elementSchema, ctx)
+  } else if (toAst.elements.length > 0) {
+    const elementSchema = S.make(toAst.elements[0].type)
+    elementType = toGraphQLTypeWithRegistry(elementSchema, ctx)
+  } else {
+    return undefined
+  }
+
+  return new GraphQLList(elementType)
+}
+
+/**
  * Handle Transformation AST nodes (arrays, optional, Schema.Class, Option, etc.)
  */
 function handleTransformationAST(ast: any, ctx: TypeConversionContext): any {
@@ -323,110 +481,38 @@ function handleTransformationAST(ast: any, ctx: TypeConversionContext): any {
   // Check if it's an Option transformation (e.g., S.OptionFromNullOr)
   // These should map to the nullable inner type
   if (isOptionDeclaration(toAst)) {
-    // For S.OptionFromNullOr, the wrapped type is in the 'from' Union, not in typeParameters
-    // Structure: Transformation { from: Union[X.ast, Literal], to: Declaration(Option) }
-    if (fromAst && fromAst._tag === "Union") {
-      // Check if any union member is a registered type
-      for (const memberAst of fromAst.types) {
-        // Skip null/undefined literals
-        if (memberAst._tag === "Literal") continue
-        if (memberAst._tag === "UndefinedKeyword") continue
-
-        // Check cache first for O(1) lookup
-        const typeName = ctx.astToTypeName?.get(memberAst)
-        if (typeName) {
-          const result = ctx.typeRegistry.get(typeName)
-          if (result) return result
-        }
-
-        // Fallback: Linear scan to check if memberAst matches any registered type
-        for (const [regTypeName, typeReg] of ctx.types) {
-          if (typeReg.schema.ast === memberAst) {
-            const result = ctx.typeRegistry.get(regTypeName)
-            if (result) return result
-          }
-        }
-
-        // Check for transformations wrapping registered types
-        if (memberAst._tag === "Transformation") {
-          const innerToAst = memberAst.to
-          const transformedTypeName = ctx.astToTypeName?.get(innerToAst)
-          if (transformedTypeName) {
-            const result = ctx.typeRegistry.get(transformedTypeName)
-            if (result) return result
-          }
-          // Fallback: Linear scan for transformation's inner AST
-          for (const [regTypeName, typeReg] of ctx.types) {
-            if (typeReg.schema.ast === innerToAst) {
-              const result = ctx.typeRegistry.get(regTypeName)
-              if (result) return result
-            }
-          }
-        }
-
-        // Check for Option.Some pattern - TypeLiteral with 'value' field
-        if (memberAst._tag === "TypeLiteral") {
-          const valueField = memberAst.propertySignatures?.find(
-            (p: any) => String(p.name) === "value"
-          )
-          if (valueField) {
-            const valueType = valueField.type
-
-            // Check cache first
-            const valueTypeName = ctx.astToTypeName?.get(valueType)
-            if (valueTypeName) {
-              const result = ctx.typeRegistry.get(valueTypeName)
-              if (result) return result
-            }
-
-            // Fallback: Linear scan for value type
-            for (const [regTypeName, typeReg] of ctx.types) {
-              if (typeReg.schema.ast === valueType) {
-                const result = ctx.typeRegistry.get(regTypeName)
-                if (result) return result
-              }
-              // Also check unwrapped forms
-              let regAst = typeReg.schema.ast as any
-              while (regAst._tag === "Transformation") {
-                regAst = regAst.to
-                if (regAst === valueType) {
-                  const result = ctx.typeRegistry.get(regTypeName)
-                  if (result) return result
-                }
-              }
-            }
-
-            // Recursively resolve the value type
-            const innerResult = toGraphQLTypeWithRegistry(S.make(valueType), ctx)
-            if (innerResult) return innerResult
-          }
-        }
-      }
-    }
-
-    // Fallback to typeParameters for S.Option(X)
-    const innerType = getOptionInnerType(toAst)
-    if (innerType) {
-      // Return the inner type as nullable (not wrapped in NonNull)
-      return toGraphQLTypeWithRegistry(S.make(innerType), ctx)
-    }
+    const optionResult = handleOptionTransformation(ast, fromAst, toAst, ctx)
+    if (optionResult) return optionResult
   }
 
   // Check if it's an array (readonly array on the to side)
-  if (toAst._tag === "TupleType") {
-    if (toAst.rest && toAst.rest.length > 0) {
-      const elementSchema = S.make(toAst.rest[0].type)
-      const elementType = toGraphQLTypeWithRegistry(elementSchema, ctx)
-      return new GraphQLList(elementType)
-    } else if (toAst.elements.length > 0) {
-      const elementSchema = S.make(toAst.elements[0].type)
-      const elementType = toGraphQLTypeWithRegistry(elementSchema, ctx)
-      return new GraphQLList(elementType)
-    }
-  }
+  const arrayResult = handleArrayTransformation(toAst, ctx)
+  if (arrayResult) return arrayResult
 
   // Other transformations - recurse on the "to" side
   return toGraphQLTypeWithRegistry(S.make(ast.to), ctx)
+}
+
+/**
+ * Find a registered type in union members (handles S.Option(RegisteredType))
+ */
+function findRegisteredTypeInUnionMembers(
+  types: any[],
+  ctx: TypeConversionContext
+): GraphQLObjectType | undefined {
+  // Check if any union member is a registered type
+  // S.Option/S.OptionFromNullOr wraps the type inside a Union in the 'from' position
+  for (const memberAst of types) {
+    // Try various strategies to find registered type
+    const registeredType =
+      findRegisteredTypeForAST(memberAst, ctx) ||
+      findRegisteredTypeForTransformation(memberAst, ctx) ||
+      findRegisteredTypeForOptionSome(memberAst, ctx)
+
+    if (registeredType) return registeredType
+  }
+
+  return undefined
 }
 
 /**
@@ -445,82 +531,9 @@ function handleUnionAST(ast: any, ctx: TypeConversionContext): any {
     if (unionType) return unionType
   }
 
-  // Check if any union member is a registered type (handles S.Option(RegisteredType))
-  // S.Option/S.OptionFromNullOr wraps the type inside a Union in the 'from' position
-  for (const memberAst of ast.types) {
-    // Check cache first for O(1) lookup
-    const typeName = ctx.astToTypeName?.get(memberAst)
-    if (typeName) {
-      const result = ctx.typeRegistry.get(typeName)
-      if (result) return result
-    }
-
-    // Fallback: Linear scan to check if memberAst matches any registered type
-    for (const [regTypeName, typeReg] of ctx.types) {
-      if (typeReg.schema.ast === memberAst) {
-        const result = ctx.typeRegistry.get(regTypeName)
-        if (result) return result
-      }
-    }
-
-    // Also check for transformations wrapping registered types
-    if (memberAst._tag === "Transformation") {
-      const toAst = memberAst.to
-      const transformedTypeName = ctx.astToTypeName?.get(toAst)
-      if (transformedTypeName) {
-        const result = ctx.typeRegistry.get(transformedTypeName)
-        if (result) return result
-      }
-      // Fallback: Linear scan for transformation's inner AST
-      for (const [regTypeName, typeReg] of ctx.types) {
-        if (typeReg.schema.ast === toAst) {
-          const result = ctx.typeRegistry.get(regTypeName)
-          if (result) return result
-        }
-      }
-    }
-
-    // Check for Option.Some pattern - TypeLiteral with a 'value' field containing the wrapped type
-    if (memberAst._tag === "TypeLiteral") {
-      const valueField = memberAst.propertySignatures?.find(
-        (p: any) => String(p.name) === "value"
-      )
-      if (valueField) {
-        const valueType = valueField.type
-
-        // Check cache first
-        const valueTypeName = ctx.astToTypeName?.get(valueType)
-        if (valueTypeName) {
-          const result = ctx.typeRegistry.get(valueTypeName)
-          if (result) return result
-        }
-
-        // Fallback: Linear scan for value type
-        for (const [regTypeName, typeReg] of ctx.types) {
-          if (typeReg.schema.ast === valueType) {
-            const result = ctx.typeRegistry.get(regTypeName)
-            if (result) return result
-          }
-          // Also check unwrapped forms
-          let regAst = typeReg.schema.ast as any
-          while (regAst._tag === "Transformation") {
-            regAst = regAst.to
-            if (regAst === valueType) {
-              const result = ctx.typeRegistry.get(regTypeName)
-              if (result) return result
-            }
-          }
-        }
-
-        // Recursively resolve the value type - this handles transformations, nested options, etc.
-        const innerResult = toGraphQLTypeWithRegistry(S.make(valueType), ctx)
-        // Return if we found a registered type (has a proper name, not auto-generated)
-        if (innerResult) {
-          return innerResult
-        }
-      }
-    }
-  }
+  // Check if any union member is a registered type
+  const registeredType = findRegisteredTypeInUnionMembers(ast.types, ctx)
+  if (registeredType) return registeredType
 
   // Fallback: use first type
   if (ast.types.length > 0) {
@@ -778,6 +791,413 @@ export function buildInputTypeLookupCache(
 }
 
 /**
+ * Find a registered input type for a schema/AST
+ */
+function findRegisteredInputType(
+  schema: S.Schema<any, any, any>,
+  ast: AST.AST,
+  inputs: Map<string, InputTypeRegistration>,
+  inputRegistry: Map<string, GraphQLInputObjectType>,
+  cache?: InputTypeLookupCache
+): GraphQLInputObjectType | undefined {
+  // Check cache first for O(1) lookup
+  if (cache?.schemaToInputName || cache?.astToInputName) {
+    const inputName = cache.schemaToInputName?.get(schema) ?? cache.astToInputName?.get(ast)
+    if (inputName) {
+      return inputRegistry.get(inputName)
+    }
+  } else {
+    // Fallback to linear scan if no cache
+    for (const [inputName, inputReg] of inputs) {
+      if (inputReg.schema.ast === ast || inputReg.schema === schema) {
+        return inputRegistry.get(inputName)
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Find a registered input type for an AST node, checking cache and fallback scans
+ */
+function findRegisteredInputForAST(
+  memberAst: any,
+  inputs: Map<string, InputTypeRegistration>,
+  inputRegistry: Map<string, GraphQLInputObjectType>,
+  enumRegistry: Map<string, GraphQLEnumType>,
+  enums: Map<string, EnumRegistration>,
+  cache?: InputTypeLookupCache
+): any {
+  // Check cache first for O(1) lookup
+  const inputName = cache?.astToInputName?.get(memberAst)
+  if (inputName) {
+    const inputReg = inputs.get(inputName)
+    if (inputReg) {
+      return toGraphQLInputTypeWithRegistry(
+        inputReg.schema,
+        enumRegistry,
+        inputRegistry,
+        inputs,
+        enums,
+        cache
+      )
+    }
+  }
+
+  // Fallback: Linear scan to check if memberAst matches any registered input
+  for (const [, inputReg] of inputs) {
+    if (inputReg.schema.ast === memberAst) {
+      return toGraphQLInputTypeWithRegistry(
+        inputReg.schema,
+        enumRegistry,
+        inputRegistry,
+        inputs,
+        enums,
+        cache
+      )
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * Find a registered input type for a transformation's inner AST
+ */
+function findRegisteredInputForTransformation(
+  memberAst: any,
+  inputs: Map<string, InputTypeRegistration>,
+  inputRegistry: Map<string, GraphQLInputObjectType>,
+  enumRegistry: Map<string, GraphQLEnumType>,
+  enums: Map<string, EnumRegistration>,
+  cache?: InputTypeLookupCache
+): any {
+  if (memberAst._tag !== "Transformation") return undefined
+
+  const innerToAst = memberAst.to
+  const transformedInputName = cache?.astToInputName?.get(innerToAst)
+  if (transformedInputName) {
+    const inputReg = inputs.get(transformedInputName)
+    if (inputReg) {
+      return toGraphQLInputTypeWithRegistry(
+        inputReg.schema,
+        enumRegistry,
+        inputRegistry,
+        inputs,
+        enums,
+        cache
+      )
+    }
+  }
+
+  // Fallback: Linear scan for transformation's inner AST
+  for (const [, inputReg] of inputs) {
+    if (inputReg.schema.ast === innerToAst) {
+      return toGraphQLInputTypeWithRegistry(
+        inputReg.schema,
+        enumRegistry,
+        inputRegistry,
+        inputs,
+        enums,
+        cache
+      )
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * Find a registered input type for an Option.Some pattern (TypeLiteral with 'value' field)
+ */
+function findRegisteredInputForOptionSome(
+  memberAst: any,
+  inputs: Map<string, InputTypeRegistration>,
+  inputRegistry: Map<string, GraphQLInputObjectType>,
+  enumRegistry: Map<string, GraphQLEnumType>,
+  enums: Map<string, EnumRegistration>,
+  cache?: InputTypeLookupCache
+): any {
+  if (memberAst._tag !== "TypeLiteral") return undefined
+
+  const valueField = (memberAst as any).propertySignatures?.find(
+    (p: any) => String(p.name) === "value"
+  )
+  if (!valueField) return undefined
+
+  const valueType = valueField.type
+
+  // Check cache first for the value type
+  const valueInputName = cache?.astToInputName?.get(valueType)
+  if (valueInputName) {
+    const inputReg = inputs.get(valueInputName)
+    if (inputReg) {
+      return toGraphQLInputTypeWithRegistry(
+        inputReg.schema,
+        enumRegistry,
+        inputRegistry,
+        inputs,
+        enums,
+        cache
+      )
+    }
+  }
+
+  // Fallback: Linear scan to check if valueType matches any registered input
+  for (const [, inputReg] of inputs) {
+    if (inputReg.schema.ast === valueType) {
+      return toGraphQLInputTypeWithRegistry(
+        inputReg.schema,
+        enumRegistry,
+        inputRegistry,
+        inputs,
+        enums,
+        cache
+      )
+    }
+    // Also check unwrapped forms of registered schema
+    let regAst = inputReg.schema.ast as any
+    while (regAst._tag === "Transformation") {
+      regAst = regAst.to
+      if (regAst === valueType) {
+        return toGraphQLInputTypeWithRegistry(
+          inputReg.schema,
+          enumRegistry,
+          inputRegistry,
+          inputs,
+          enums,
+          cache
+        )
+      }
+    }
+    if (regAst._tag === "Declaration" && regAst.typeParameters?.[0] === valueType) {
+      return toGraphQLInputTypeWithRegistry(
+        inputReg.schema,
+        enumRegistry,
+        inputRegistry,
+        inputs,
+        enums,
+        cache
+      )
+    }
+  }
+
+  // Recursively resolve the value type if no direct match found
+  const innerResult = toGraphQLInputTypeWithRegistry(
+    S.make(valueType),
+    enumRegistry,
+    inputRegistry,
+    inputs,
+    enums,
+    cache
+  )
+  return innerResult || undefined
+}
+
+/**
+ * Handle Option transformation for input types
+ */
+function handleOptionTransformationForInput(
+  fromAst: any,
+  toAst: any,
+  inputs: Map<string, InputTypeRegistration>,
+  inputRegistry: Map<string, GraphQLInputObjectType>,
+  enumRegistry: Map<string, GraphQLEnumType>,
+  enums: Map<string, EnumRegistration>,
+  cache?: InputTypeLookupCache
+): any {
+  // For S.OptionFromNullOr and S.Option, check the 'from' Union for registered input types
+  if (!fromAst || fromAst._tag !== "Union") return undefined
+
+  for (const memberAst of fromAst.types) {
+    // Skip null/undefined literals
+    if (memberAst._tag === "Literal") continue
+    if (memberAst._tag === "UndefinedKeyword") continue
+
+    // Try various strategies to find registered input
+    const registeredInput =
+      findRegisteredInputForAST(memberAst, inputs, inputRegistry, enumRegistry, enums, cache) ||
+      findRegisteredInputForTransformation(memberAst, inputs, inputRegistry, enumRegistry, enums, cache) ||
+      findRegisteredInputForOptionSome(memberAst, inputs, inputRegistry, enumRegistry, enums, cache)
+
+    if (registeredInput) return registeredInput
+  }
+
+  return undefined
+}
+
+/**
+ * Handle transformation AST for input types
+ */
+function handleTransformationForInput(
+  ast: any,
+  inputs: Map<string, InputTypeRegistration>,
+  inputRegistry: Map<string, GraphQLInputObjectType>,
+  enumRegistry: Map<string, GraphQLEnumType>,
+  enums: Map<string, EnumRegistration>,
+  cache?: InputTypeLookupCache
+): any {
+  const toAst = (ast as any).to
+  const fromAst = (ast as any).from
+
+  // For S.OptionFromNullOr and S.Option, check the 'from' Union for registered input types
+  if (isOptionDeclaration(toAst)) {
+    const optionResult = handleOptionTransformationForInput(
+      fromAst,
+      toAst,
+      inputs,
+      inputRegistry,
+      enumRegistry,
+      enums,
+      cache
+    )
+    if (optionResult) return optionResult
+  }
+
+  return toGraphQLInputTypeWithRegistry(
+    S.make(toAst),
+    enumRegistry,
+    inputRegistry,
+    inputs,
+    enums,
+    cache
+  )
+}
+
+/**
+ * Find a registered input type in union members
+ */
+function findRegisteredInputInUnionMembers(
+  types: any[],
+  inputs: Map<string, InputTypeRegistration>,
+  inputRegistry: Map<string, GraphQLInputObjectType>,
+  enumRegistry: Map<string, GraphQLEnumType>,
+  enums: Map<string, EnumRegistration>,
+  cache?: InputTypeLookupCache
+): any {
+  for (const memberAst of types) {
+    // Try various strategies to find registered input
+    const registeredInput =
+      findRegisteredInputForAST(memberAst, inputs, inputRegistry, enumRegistry, enums, cache) ||
+      findRegisteredInputForTransformation(memberAst, inputs, inputRegistry, enumRegistry, enums, cache) ||
+      findRegisteredInputForOptionSome(memberAst, inputs, inputRegistry, enumRegistry, enums, cache)
+
+    if (registeredInput) return registeredInput
+  }
+
+  return undefined
+}
+
+/**
+ * Handle union AST for input types
+ */
+function handleUnionForInput(
+  ast: any,
+  inputs: Map<string, InputTypeRegistration>,
+  inputRegistry: Map<string, GraphQLInputObjectType>,
+  enumRegistry: Map<string, GraphQLEnumType>,
+  enums: Map<string, EnumRegistration>,
+  cache?: InputTypeLookupCache
+): any {
+  const unionAst = ast as any
+
+  // Handle S.optional which creates Union(LiteralUnion, UndefinedKeyword)
+  const nonUndefinedTypes = unionAst.types.filter((t: any) => t._tag !== "UndefinedKeyword")
+  if (nonUndefinedTypes.length === 1) {
+    if (nonUndefinedTypes[0]._tag === "Union" || nonUndefinedTypes[0]._tag === "TypeLiteral") {
+      return toGraphQLInputTypeWithRegistry(
+        S.make(nonUndefinedTypes[0]),
+        enumRegistry,
+        inputRegistry,
+        inputs,
+        enums,
+        cache
+      )
+    }
+  }
+
+  // Check if any union member is a registered input type
+  const registeredInput = findRegisteredInputInUnionMembers(
+    unionAst.types,
+    inputs,
+    inputRegistry,
+    enumRegistry,
+    enums,
+    cache
+  )
+  if (registeredInput) return registeredInput
+
+  // Check for enum match (all literals)
+  const allLiterals = unionAst.types.every((t: any) => t._tag === "Literal")
+  if (allLiterals) {
+    const literalValues = unionAst.types.map((t: any) => String(t.literal)).sort()
+
+    // Use cached sorted values if available
+    for (const [enumName] of enums) {
+      const enumValues =
+        cache?.enumSortedValues?.get(enumName) ?? [...enums.get(enumName)!.values].sort()
+      if (
+        literalValues.length === enumValues.length &&
+        literalValues.every((v: string, i: number) => v === enumValues[i])
+      ) {
+        const result = enumRegistry.get(enumName)
+        if (result) return result
+      }
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * Handle literal AST for input types
+ */
+function handleLiteralForInput(
+  ast: any,
+  enumRegistry: Map<string, GraphQLEnumType>,
+  enums: Map<string, EnumRegistration>,
+  cache?: InputTypeLookupCache
+): GraphQLEnumType | undefined {
+  const literalValue = String(ast.literal)
+  if (cache?.literalToEnumName) {
+    const enumName = cache.literalToEnumName.get(literalValue)
+    if (enumName) {
+      return enumRegistry.get(enumName)
+    }
+  } else {
+    // Fallback to linear scan if no cache
+    for (const [enumName, enumReg] of enums) {
+      if (enumReg.values.includes(literalValue)) {
+        return enumRegistry.get(enumName)
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Handle suspend AST for input types
+ */
+function handleSuspendForInput(
+  ast: any,
+  inputs: Map<string, InputTypeRegistration>,
+  inputRegistry: Map<string, GraphQLInputObjectType>,
+  enumRegistry: Map<string, GraphQLEnumType>,
+  enums: Map<string, EnumRegistration>,
+  cache?: InputTypeLookupCache
+): any {
+  const innerAst = (ast as any).f()
+  return toGraphQLInputTypeWithRegistry(
+    S.make(innerAst),
+    enumRegistry,
+    inputRegistry,
+    inputs,
+    enums,
+    cache
+  )
+}
+
+/**
  * Convert a schema to GraphQL input type, checking enum and input registries.
  * Uses O(1) reverse lookups when cache is provided.
  */
@@ -793,415 +1213,29 @@ export function toGraphQLInputTypeWithRegistry(
 
   // Check if this schema matches a registered input type FIRST (O(1) with cache)
   // This must happen before transformation handling to find registered types
-  if (cache?.schemaToInputName || cache?.astToInputName) {
-    const inputName = cache.schemaToInputName?.get(schema) ?? cache.astToInputName?.get(ast)
-    if (inputName) {
-      const result = inputRegistry.get(inputName)
-      if (result) return result
-    }
-  } else {
-    // Fallback to linear scan if no cache
-    for (const [inputName, inputReg] of inputs) {
-      if (inputReg.schema.ast === ast || inputReg.schema === schema) {
-        const result = inputRegistry.get(inputName)
-        if (result) return result
-      }
-    }
-  }
+  const registeredInput = findRegisteredInputType(schema, ast, inputs, inputRegistry, cache)
+  if (registeredInput) return registeredInput
 
   // Handle transformations (like S.optional wrapping) AFTER registry lookup
   if (ast._tag === "Transformation") {
-    const toAst = (ast as any).to
-    const fromAst = (ast as any).from
-
-    // For S.OptionFromNullOr and S.Option, check the 'from' Union for registered input types
-    // S.OptionFromNullOr: Transformation { from: Union[X.ast, Literal], to: Declaration(Option) }
-    // S.Option: Transformation { from: Union[Option.None, Option.Some{value: X}], to: Declaration(Option) }
-    if (isOptionDeclaration(toAst) && fromAst && fromAst._tag === "Union") {
-      for (const memberAst of fromAst.types) {
-        // Skip null/undefined literals
-        if (memberAst._tag === "Literal") continue
-        if (memberAst._tag === "UndefinedKeyword") continue
-
-        // Check cache first for O(1) lookup, then recursively process the registered schema
-        const inputName = cache?.astToInputName?.get(memberAst)
-        if (inputName) {
-          const inputReg = inputs.get(inputName)
-          if (inputReg) {
-            // Recursively process to ensure it gets generated with the registered name
-            return toGraphQLInputTypeWithRegistry(
-              inputReg.schema,
-              enumRegistry,
-              inputRegistry,
-              inputs,
-              enums,
-              cache
-            )
-          }
-        }
-
-        // Fallback: Linear scan to check if memberAst matches any registered input
-        for (const [, inputReg] of inputs) {
-          if (inputReg.schema.ast === memberAst) {
-            // Recursively process to ensure it gets generated with the registered name
-            return toGraphQLInputTypeWithRegistry(
-              inputReg.schema,
-              enumRegistry,
-              inputRegistry,
-              inputs,
-              enums,
-              cache
-            )
-          }
-        }
-
-        // Check for transformations wrapping registered input types
-        if (memberAst._tag === "Transformation") {
-          const innerToAst = memberAst.to
-          const transformedInputName = cache?.astToInputName?.get(innerToAst)
-          if (transformedInputName) {
-            const inputReg = inputs.get(transformedInputName)
-            if (inputReg) {
-              return toGraphQLInputTypeWithRegistry(
-                inputReg.schema,
-                enumRegistry,
-                inputRegistry,
-                inputs,
-                enums,
-                cache
-              )
-            }
-          }
-          // Fallback: Linear scan for transformation's inner AST
-          for (const [, inputReg] of inputs) {
-            if (inputReg.schema.ast === innerToAst) {
-              return toGraphQLInputTypeWithRegistry(
-                inputReg.schema,
-                enumRegistry,
-                inputRegistry,
-                inputs,
-                enums,
-                cache
-              )
-            }
-          }
-        }
-
-        // Check for Option.Some pattern - TypeLiteral with 'value' field containing the wrapped type
-        if (memberAst._tag === "TypeLiteral") {
-          const valueField = (memberAst as any).propertySignatures?.find(
-            (p: any) => String(p.name) === "value"
-          )
-          if (valueField) {
-            const valueType = valueField.type
-
-            // Check cache first for the value type
-            const valueInputName = cache?.astToInputName?.get(valueType)
-            if (valueInputName) {
-              const inputReg = inputs.get(valueInputName)
-              if (inputReg) {
-                return toGraphQLInputTypeWithRegistry(
-                  inputReg.schema,
-                  enumRegistry,
-                  inputRegistry,
-                  inputs,
-                  enums,
-                  cache
-                )
-              }
-            }
-
-            // Fallback: Linear scan to check if valueType matches any registered input
-            for (const [, inputReg] of inputs) {
-              if (inputReg.schema.ast === valueType) {
-                return toGraphQLInputTypeWithRegistry(
-                  inputReg.schema,
-                  enumRegistry,
-                  inputRegistry,
-                  inputs,
-                  enums,
-                  cache
-                )
-              }
-              // Also check unwrapped forms of registered schema
-              let regAst = inputReg.schema.ast as any
-              while (regAst._tag === "Transformation") {
-                regAst = regAst.to
-                if (regAst === valueType) {
-                  return toGraphQLInputTypeWithRegistry(
-                    inputReg.schema,
-                    enumRegistry,
-                    inputRegistry,
-                    inputs,
-                    enums,
-                    cache
-                  )
-                }
-              }
-              if (regAst._tag === "Declaration" && regAst.typeParameters?.[0] === valueType) {
-                return toGraphQLInputTypeWithRegistry(
-                  inputReg.schema,
-                  enumRegistry,
-                  inputRegistry,
-                  inputs,
-                  enums,
-                  cache
-                )
-              }
-            }
-
-            // Recursively resolve the value type if no direct match found
-            const innerResult = toGraphQLInputTypeWithRegistry(
-              S.make(valueType),
-              enumRegistry,
-              inputRegistry,
-              inputs,
-              enums,
-              cache
-            )
-            if (innerResult) {
-              return innerResult
-            }
-          }
-        }
-      }
-    }
-
-    return toGraphQLInputTypeWithRegistry(
-      S.make(toAst),
-      enumRegistry,
-      inputRegistry,
-      inputs,
-      enums,
-      cache
-    )
+    return handleTransformationForInput(ast, inputs, inputRegistry, enumRegistry, enums, cache)
   }
 
   // Check if this schema matches a registered enum
   if (ast._tag === "Union") {
-    const unionAst = ast as any
-
-    // Handle S.optional which creates Union(LiteralUnion, UndefinedKeyword)
-    const nonUndefinedTypes = unionAst.types.filter((t: any) => t._tag !== "UndefinedKeyword")
-    if (nonUndefinedTypes.length === 1 && nonUndefinedTypes[0]._tag === "Union") {
-      return toGraphQLInputTypeWithRegistry(
-        S.make(nonUndefinedTypes[0]),
-        enumRegistry,
-        inputRegistry,
-        inputs,
-        enums,
-        cache
-      )
-    }
-
-    // Check for nested input type inside optional
-    if (nonUndefinedTypes.length === 1 && nonUndefinedTypes[0]._tag === "TypeLiteral") {
-      return toGraphQLInputTypeWithRegistry(
-        S.make(nonUndefinedTypes[0]),
-        enumRegistry,
-        inputRegistry,
-        inputs,
-        enums,
-        cache
-      )
-    }
-
-    // Check if any union member is a registered input type (handles S.Option(RegisteredInput))
-    // S.Option/S.OptionFromNullOr wraps the type inside a Union in the 'from' position
-    for (const memberAst of unionAst.types) {
-      // Check cache first for O(1) lookup, then recursively process the registered schema
-      const inputName = cache?.astToInputName?.get(memberAst)
-      if (inputName) {
-        const inputReg = inputs.get(inputName)
-        if (inputReg) {
-          return toGraphQLInputTypeWithRegistry(
-            inputReg.schema,
-            enumRegistry,
-            inputRegistry,
-            inputs,
-            enums,
-            cache
-          )
-        }
-      }
-
-      // Fallback: Linear scan to check if memberAst matches any registered input
-      for (const [, inputReg] of inputs) {
-        if (inputReg.schema.ast === memberAst) {
-          return toGraphQLInputTypeWithRegistry(
-            inputReg.schema,
-            enumRegistry,
-            inputRegistry,
-            inputs,
-            enums,
-            cache
-          )
-        }
-      }
-
-      // Also check for transformations wrapping registered input types
-      if (memberAst._tag === "Transformation") {
-        const toAst = memberAst.to
-        const transformedInputName = cache?.astToInputName?.get(toAst)
-        if (transformedInputName) {
-          const inputReg = inputs.get(transformedInputName)
-          if (inputReg) {
-            return toGraphQLInputTypeWithRegistry(
-              inputReg.schema,
-              enumRegistry,
-              inputRegistry,
-              inputs,
-              enums,
-              cache
-            )
-          }
-        }
-        // Fallback: Linear scan for transformation's inner AST
-        for (const [, inputReg] of inputs) {
-          if (inputReg.schema.ast === toAst) {
-            return toGraphQLInputTypeWithRegistry(
-              inputReg.schema,
-              enumRegistry,
-              inputRegistry,
-              inputs,
-              enums,
-              cache
-            )
-          }
-        }
-      }
-
-      // Check for Option.Some pattern - TypeLiteral with a 'value' field containing the wrapped type
-      if (memberAst._tag === "TypeLiteral") {
-        const valueField = (memberAst as any).propertySignatures?.find(
-          (p: any) => String(p.name) === "value"
-        )
-        if (valueField) {
-          const valueType = valueField.type
-
-          // Check cache first for the value type
-          const valueInputName = cache?.astToInputName?.get(valueType)
-          if (valueInputName) {
-            const inputReg = inputs.get(valueInputName)
-            if (inputReg) {
-              return toGraphQLInputTypeWithRegistry(
-                inputReg.schema,
-                enumRegistry,
-                inputRegistry,
-                inputs,
-                enums,
-                cache
-              )
-            }
-          }
-
-          // Fallback: Linear scan to check if valueType matches any registered input
-          for (const [, inputReg] of inputs) {
-            if (inputReg.schema.ast === valueType) {
-              return toGraphQLInputTypeWithRegistry(
-                inputReg.schema,
-                enumRegistry,
-                inputRegistry,
-                inputs,
-                enums,
-                cache
-              )
-            }
-            // Also check unwrapped forms of registered schema
-            let regAst = inputReg.schema.ast as any
-            while (regAst._tag === "Transformation") {
-              regAst = regAst.to
-              if (regAst === valueType) {
-                return toGraphQLInputTypeWithRegistry(
-                  inputReg.schema,
-                  enumRegistry,
-                  inputRegistry,
-                  inputs,
-                  enums,
-                  cache
-                )
-              }
-            }
-            if (regAst._tag === "Declaration" && regAst.typeParameters?.[0] === valueType) {
-              return toGraphQLInputTypeWithRegistry(
-                inputReg.schema,
-                enumRegistry,
-                inputRegistry,
-                inputs,
-                enums,
-                cache
-              )
-            }
-          }
-
-          // Recursively resolve the value type if no direct match found
-          const innerResult = toGraphQLInputTypeWithRegistry(
-            S.make(valueType),
-            enumRegistry,
-            inputRegistry,
-            inputs,
-            enums,
-            cache
-          )
-          // Return if we found a registered type
-          if (innerResult) {
-            return innerResult
-          }
-        }
-      }
-    }
-
-    const allLiterals = unionAst.types.every((t: any) => t._tag === "Literal")
-
-    if (allLiterals) {
-      const literalValues = unionAst.types.map((t: any) => String(t.literal)).sort()
-
-      // Use cached sorted values if available
-      for (const [enumName] of enums) {
-        const enumValues =
-          cache?.enumSortedValues?.get(enumName) ?? [...enums.get(enumName)!.values].sort()
-        if (
-          literalValues.length === enumValues.length &&
-          literalValues.every((v: string, i: number) => v === enumValues[i])
-        ) {
-          const result = enumRegistry.get(enumName)
-          if (result) return result
-        }
-      }
-    }
+    const unionResult = handleUnionForInput(ast, inputs, inputRegistry, enumRegistry, enums, cache)
+    if (unionResult) return unionResult
   }
 
   // Check single literal (O(1) with cache)
   if (ast._tag === "Literal") {
-    const literalValue = String((ast as any).literal)
-    if (cache?.literalToEnumName) {
-      const enumName = cache.literalToEnumName.get(literalValue)
-      if (enumName) {
-        const result = enumRegistry.get(enumName)
-        if (result) return result
-      }
-    } else {
-      // Fallback to linear scan if no cache
-      for (const [enumName, enumReg] of enums) {
-        if (enumReg.values.includes(literalValue)) {
-          const result = enumRegistry.get(enumName)
-          if (result) return result
-        }
-      }
-    }
+    const literalResult = handleLiteralForInput(ast, enumRegistry, enums, cache)
+    if (literalResult) return literalResult
   }
 
   // Handle Suspend (recursive/self-referential schemas)
   if (ast._tag === "Suspend") {
-    const innerAst = (ast as any).f()
-    return toGraphQLInputTypeWithRegistry(
-      S.make(innerAst),
-      enumRegistry,
-      inputRegistry,
-      inputs,
-      enums,
-      cache
-    )
+    return handleSuspendForInput(ast, inputs, inputRegistry, enumRegistry, enums, cache)
   }
 
   // Fall back to default toGraphQLInputType

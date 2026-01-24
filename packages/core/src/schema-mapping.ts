@@ -52,6 +52,94 @@ const isIntegerType = (ast: AST.AST): boolean => {
 }
 
 /**
+ * Handle primitive AST nodes (StringKeyword, NumberKeyword, BooleanKeyword)
+ */
+function handlePrimitiveAST(ast: AST.AST): GraphQLOutputType | GraphQLInputType | undefined {
+  if (ast._tag === "StringKeyword") return GraphQLString
+  if (ast._tag === "NumberKeyword") return GraphQLFloat
+  if (ast._tag === "BooleanKeyword") return GraphQLBoolean
+  return undefined
+}
+
+/**
+ * Handle refinement AST nodes (e.g., S.Int)
+ */
+function handleRefinementAST(
+  ast: AST.AST,
+  convertFn: (schema: S.Schema<any, any, any>) => GraphQLOutputType | GraphQLInputType
+): GraphQLOutputType | GraphQLInputType {
+  if (isIntegerType(ast)) {
+    return GraphQLInt
+  }
+  // For other refinements, use the base type
+  return convertFn(S.make((ast as any).from))
+}
+
+/**
+ * Handle literal AST nodes
+ */
+function handleLiteralAST(ast: AST.AST): GraphQLOutputType | GraphQLInputType | undefined {
+  if (ast._tag !== "Literal") return undefined
+
+  if (typeof ast.literal === "string") return GraphQLString
+  if (typeof ast.literal === "number") {
+    // Check if it's an integer literal
+    return Number.isInteger(ast.literal) ? GraphQLInt : GraphQLFloat
+  }
+  if (typeof ast.literal === "boolean") return GraphQLBoolean
+  return undefined
+}
+
+/**
+ * Handle tuple type AST nodes (arrays)
+ */
+function handleTupleTypeAST(
+  ast: AST.AST,
+  convertFn: (schema: S.Schema<any, any, any>) => GraphQLOutputType | GraphQLInputType
+): GraphQLList<any> | undefined {
+  if (ast._tag !== "TupleType") return undefined
+
+  const elements = ast.elements
+  if (elements.length > 0) {
+    const elementSchema = S.make(elements[0].type)
+    return new GraphQLList(convertFn(elementSchema))
+  }
+  return undefined
+}
+
+/**
+ * Build fields from TypeLiteral property signatures
+ */
+function buildFieldsFromPropertySignatures(
+  propertySignatures: readonly any[],
+  convertFn: (schema: S.Schema<any, any, any>) => GraphQLOutputType | GraphQLInputType,
+  isInput: boolean
+): Record<string, { type: any }> {
+  const fields: Record<string, { type: any }> = {}
+
+  for (const field of propertySignatures) {
+    const fieldName = String(field.name)
+
+    // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
+    if (fieldName === "_tag") continue
+
+    const fieldSchema = S.make(field.type)
+    let fieldType = convertFn(fieldSchema) as any
+
+    // Make non-optional fields non-null, unless they're Option transformations
+    // Option transformations (like S.OptionFromNullOr) should always be nullable
+    const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
+    if (!field.isOptional && !isOptionField) {
+      fieldType = new GraphQLNonNull(fieldType)
+    }
+
+    fields[fieldName] = { type: fieldType }
+  }
+
+  return fields
+}
+
+/**
  * Check if a Declaration AST node represents an Option type.
  * Option declarations have a TypeConstructor annotation of 'effect/Option'.
  */
@@ -101,60 +189,25 @@ export const toGraphQLType = (schema: S.Schema<any, any, any>): GraphQLOutputTyp
   const ast = schema.ast
 
   // Handle primitives
-  if (ast._tag === "StringKeyword") return GraphQLString
-  if (ast._tag === "NumberKeyword") return GraphQLFloat
-  if (ast._tag === "BooleanKeyword") return GraphQLBoolean
+  const primitiveResult = handlePrimitiveAST(ast)
+  if (primitiveResult) return primitiveResult as GraphQLOutputType
 
   // Handle refinements (e.g., S.Int)
   if (ast._tag === "Refinement") {
-    if (isIntegerType(ast)) {
-      return GraphQLInt
-    }
-    // For other refinements, use the base type
-    return toGraphQLType(S.make((ast as any).from))
+    return handleRefinementAST(ast, toGraphQLType) as GraphQLOutputType
   }
 
   // Handle literals
-  if (ast._tag === "Literal") {
-    if (typeof ast.literal === "string") return GraphQLString
-    if (typeof ast.literal === "number") {
-      // Check if it's an integer literal
-      return Number.isInteger(ast.literal) ? GraphQLInt : GraphQLFloat
-    }
-    if (typeof ast.literal === "boolean") return GraphQLBoolean
-  }
+  const literalResult = handleLiteralAST(ast)
+  if (literalResult) return literalResult as GraphQLOutputType
 
   // Handle arrays - check for TupleType
-  if (ast._tag === "TupleType") {
-    const elements = ast.elements
-    if (elements.length > 0) {
-      const elementSchema = S.make(elements[0].type)
-      return new GraphQLList(toGraphQLType(elementSchema))
-    }
-  }
+  const tupleResult = handleTupleTypeAST(ast, toGraphQLType)
+  if (tupleResult) return tupleResult
 
   // Handle structs/objects
   if (ast._tag === "TypeLiteral") {
-    const fields: GraphQLFieldConfigMap<any, any> = {}
-
-    for (const field of ast.propertySignatures) {
-      const fieldName = String(field.name)
-
-      // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
-      if (fieldName === "_tag") continue
-
-      const fieldSchema = S.make(field.type)
-      let fieldType = toGraphQLType(fieldSchema)
-
-      // Make non-optional fields non-null, unless they're Option transformations
-      // Option transformations (like S.OptionFromNullOr) should always be nullable
-      const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
-      if (!field.isOptional && !isOptionField) {
-        fieldType = new GraphQLNonNull(fieldType)
-      }
-
-      fields[fieldName] = { type: fieldType }
-    }
+    const fields = buildFieldsFromPropertySignatures(ast.propertySignatures, toGraphQLType, false)
 
     // Generate a name from the schema or use a default
     const typeName =
@@ -221,60 +274,29 @@ export const toGraphQLInputType = (schema: S.Schema<any, any, any>): GraphQLInpu
   const ast = schema.ast
 
   // Handle primitives
-  if (ast._tag === "StringKeyword") return GraphQLString
-  if (ast._tag === "NumberKeyword") return GraphQLFloat
-  if (ast._tag === "BooleanKeyword") return GraphQLBoolean
+  const primitiveResult = handlePrimitiveAST(ast)
+  if (primitiveResult) return primitiveResult as GraphQLInputType
 
   // Handle refinements (e.g., S.Int)
   if (ast._tag === "Refinement") {
-    if (isIntegerType(ast)) {
-      return GraphQLInt
-    }
-    // For other refinements, use the base type
-    return toGraphQLInputType(S.make((ast as any).from))
+    return handleRefinementAST(ast, toGraphQLInputType) as GraphQLInputType
   }
 
   // Handle literals
-  if (ast._tag === "Literal") {
-    if (typeof ast.literal === "string") return GraphQLString
-    if (typeof ast.literal === "number") {
-      // Check if it's an integer literal
-      return Number.isInteger(ast.literal) ? GraphQLInt : GraphQLFloat
-    }
-    if (typeof ast.literal === "boolean") return GraphQLBoolean
-  }
+  const literalResult = handleLiteralAST(ast)
+  if (literalResult) return literalResult as GraphQLInputType
 
   // Handle arrays
-  if (ast._tag === "TupleType") {
-    const elements = ast.elements
-    if (elements.length > 0) {
-      const elementSchema = S.make(elements[0].type)
-      return new GraphQLList(toGraphQLInputType(elementSchema))
-    }
-  }
+  const tupleResult = handleTupleTypeAST(ast, toGraphQLInputType)
+  if (tupleResult) return tupleResult
 
   // Handle structs/objects as input types
   if (ast._tag === "TypeLiteral") {
-    const fields: Record<string, { type: GraphQLInputType }> = {}
-
-    for (const field of ast.propertySignatures) {
-      const fieldName = String(field.name)
-
-      // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
-      if (fieldName === "_tag") continue
-
-      const fieldSchema = S.make(field.type)
-      let fieldType = toGraphQLInputType(fieldSchema)
-
-      // Make non-optional fields non-null, unless they're Option transformations
-      // Option transformations (like S.OptionFromNullOr) should always be nullable
-      const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
-      if (!field.isOptional && !isOptionField) {
-        fieldType = new GraphQLNonNull(fieldType)
-      }
-
-      fields[fieldName] = { type: fieldType }
-    }
+    const fields = buildFieldsFromPropertySignatures(
+      ast.propertySignatures,
+      toGraphQLInputType,
+      true
+    )
 
     const typeName =
       (schema as any).annotations?.identifier || `Input_${Math.random().toString(36).slice(2, 11)}`
@@ -373,27 +395,9 @@ export const toGraphQLObjectType = <T>(
   }
 
   if (ast._tag === "TypeLiteral") {
-    const fields: GraphQLFieldConfigMap<any, any> = {}
-
     // Add fields from schema
-    for (const field of ast.propertySignatures) {
-      const fieldName = String(field.name)
-
-      // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
-      if (fieldName === "_tag") continue
-
-      const fieldSchema = S.make(field.type)
-      let fieldType = toGraphQLType(fieldSchema)
-
-      // Make non-optional fields non-null, unless they're Option transformations
-      // Option transformations (like S.OptionFromNullOr) should always be nullable
-      const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
-      if (!field.isOptional && !isOptionField) {
-        fieldType = new GraphQLNonNull(fieldType)
-      }
-
-      fields[fieldName] = { type: fieldType }
-    }
+    const baseFields = buildFieldsFromPropertySignatures(ast.propertySignatures, toGraphQLType, false)
+    const fields: GraphQLFieldConfigMap<any, any> = { ...baseFields }
 
     // Add additional computed/relational fields
     if (additionalFields) {
@@ -424,28 +428,8 @@ export const toGraphQLArgs = (schema: S.Schema<any, any, any>): GraphQLFieldConf
   const ast = schema.ast
 
   if (ast._tag === "TypeLiteral") {
-    const args: GraphQLFieldConfigArgumentMap = {}
-
-    for (const field of ast.propertySignatures) {
-      const fieldName = String(field.name)
-
-      // Skip _tag field from TaggedStruct/TaggedClass - it's an internal discriminator
-      if (fieldName === "_tag") continue
-
-      const fieldSchema = S.make(field.type)
-      let fieldType = toGraphQLInputType(fieldSchema)
-
-      // Make non-optional fields non-null, unless they're Option transformations
-      // Option transformations (like S.OptionFromNullOr) should always be nullable
-      const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
-      if (!field.isOptional && !isOptionField) {
-        fieldType = new GraphQLNonNull(fieldType)
-      }
-
-      args[fieldName] = { type: fieldType }
-    }
-
-    return args
+    const args = buildFieldsFromPropertySignatures(ast.propertySignatures, toGraphQLInputType, true)
+    return args as GraphQLFieldConfigArgumentMap
   }
 
   throw new Error(`Schema must be an object type to convert to GraphQL arguments`)
