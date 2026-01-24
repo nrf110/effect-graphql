@@ -9,11 +9,11 @@ import type { ServerType, TemplateContext } from "../types"
  * Keep in sync with the main packages
  */
 const VERSIONS = {
-  core: "^1.4.7",
-  node: "^1.4.7",
-  bun: "^1.4.7",
-  express: "^1.4.7",
-  web: "^1.4.7",
+  core: "^1.4.8",
+  node: "^1.4.8",
+  bun: "^1.4.8",
+  express: "^1.4.8",
+  web: "^1.4.8",
   effect: "^3.19.0",
   platform: "^0.94.0",
   platformNode: "^0.104.0",
