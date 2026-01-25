@@ -1267,8 +1267,10 @@ export function toGraphQLArgsWithRegistry(
         cache
       )
 
-      // Make non-optional fields non-null (memoized)
-      if (!field.isOptional) {
+      // Make non-optional fields non-null, unless they're Option transformations
+      // Option transformations (like S.OptionFromNullOr) should always be nullable
+      const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
+      if (!field.isOptional && !isOptionField) {
         fieldType = getNonNull(fieldType)
       }
 

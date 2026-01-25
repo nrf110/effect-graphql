@@ -619,6 +619,27 @@ describe("type-registry.ts", () => {
       expect(isNonNullType(args.limit.type)).toBe(false)
     })
 
+    it("should handle OptionFromNullOr fields in query arguments as nullable", () => {
+      const ArgsSchema = S.Struct({
+        limit: S.NonNegativeInt,
+        cursor: S.OptionFromNullOr(S.String),
+        offset: S.OptionFromNullOr(S.Int),
+      })
+
+      const args = toGraphQLArgsWithRegistry(ArgsSchema, new Map(), new Map(), new Map(), new Map())
+
+      expect(args.limit).toBeDefined()
+      expect(args.cursor).toBeDefined()
+      expect(args.offset).toBeDefined()
+
+      // Required field should be NonNull
+      expect(isNonNullType(args.limit.type)).toBe(true)
+
+      // OptionFromNullOr fields should be nullable (not wrapped in NonNull)
+      expect(isNonNullType(args.cursor.type)).toBe(false)
+      expect(isNonNullType(args.offset.type)).toBe(false)
+    })
+
     it("should use enum registry for enum args", () => {
       const StatusEnum = new GraphQLEnumType({
         name: "Status",
