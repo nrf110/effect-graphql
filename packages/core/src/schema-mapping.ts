@@ -113,7 +113,6 @@ function handleTupleTypeAST(
 function buildFieldsFromPropertySignatures(
   propertySignatures: readonly any[],
   convertFn: (schema: S.Schema<any, any, any>) => GraphQLOutputType | GraphQLInputType,
-  isInput: boolean
 ): Record<string, { type: any }> {
   const fields: Record<string, { type: any }> = {}
 
@@ -207,7 +206,7 @@ export const toGraphQLType = (schema: S.Schema<any, any, any>): GraphQLOutputTyp
 
   // Handle structs/objects
   if (ast._tag === "TypeLiteral") {
-    const fields = buildFieldsFromPropertySignatures(ast.propertySignatures, toGraphQLType, false)
+    const fields = buildFieldsFromPropertySignatures(ast.propertySignatures, toGraphQLType)
 
     // Generate a name from the schema or use a default
     const typeName =
@@ -295,7 +294,6 @@ export const toGraphQLInputType = (schema: S.Schema<any, any, any>): GraphQLInpu
     const fields = buildFieldsFromPropertySignatures(
       ast.propertySignatures,
       toGraphQLInputType,
-      true
     )
 
     const typeName =
@@ -396,7 +394,7 @@ export const toGraphQLObjectType = <T>(
 
   if (ast._tag === "TypeLiteral") {
     // Add fields from schema
-    const baseFields = buildFieldsFromPropertySignatures(ast.propertySignatures, toGraphQLType, false)
+    const baseFields = buildFieldsFromPropertySignatures(ast.propertySignatures, toGraphQLType)
     const fields: GraphQLFieldConfigMap<any, any> = { ...baseFields }
 
     // Add additional computed/relational fields
@@ -428,7 +426,7 @@ export const toGraphQLArgs = (schema: S.Schema<any, any, any>): GraphQLFieldConf
   const ast = schema.ast
 
   if (ast._tag === "TypeLiteral") {
-    const args = buildFieldsFromPropertySignatures(ast.propertySignatures, toGraphQLInputType, true)
+    const args = buildFieldsFromPropertySignatures(ast.propertySignatures, toGraphQLInputType)
     return args as GraphQLFieldConfigArgumentMap
   }
 
