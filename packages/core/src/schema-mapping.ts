@@ -142,7 +142,7 @@ function buildFieldsFromPropertySignatures(
  * Check if a Declaration AST node represents an Option type.
  * Option declarations have a TypeConstructor annotation of 'effect/Option'.
  */
-const isOptionDeclaration = (ast: AST.AST): boolean => {
+export const isOptionDeclaration = (ast: AST.AST): boolean => {
   if (ast._tag === "Declaration") {
     const annotations = (ast as any).annotations
     if (annotations) {
@@ -160,7 +160,7 @@ const isOptionDeclaration = (ast: AST.AST): boolean => {
  * Check if a Transformation represents an Option schema (e.g., S.OptionFromNullOr).
  * These have a Declaration with "Option" identifier on the "to" side.
  */
-const isOptionTransformation = (ast: AST.AST): boolean => {
+export const isOptionTransformation = (ast: AST.AST): boolean => {
   if (ast._tag === "Transformation") {
     return isOptionDeclaration((ast as any).to)
   }

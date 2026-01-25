@@ -11,7 +11,13 @@ import {
   GraphQLFieldConfigMap,
   GraphQLInputFieldConfigMap,
 } from "graphql"
-import { toGraphQLType, toGraphQLArgs, toGraphQLInputType } from "../schema-mapping"
+import {
+  toGraphQLType,
+  toGraphQLArgs,
+  toGraphQLInputType,
+  isOptionTransformation,
+  isOptionDeclaration,
+} from "../schema-mapping"
 import type {
   TypeRegistration,
   InterfaceRegistration,
@@ -280,24 +286,6 @@ function findRegisteredInterface(
     return ctx.interfaceRegistry.get(interfaceName)
   }
   return undefined
-}
-
-/**
- * Check if a Declaration AST node represents an Option type.
- * Option declarations have a TypeConstructor annotation of 'effect/Option'.
- */
-function isOptionDeclaration(ast: AST.AST): boolean {
-  if (ast._tag === "Declaration") {
-    const annotations = (ast as any).annotations
-    if (annotations) {
-      const TypeConstructorSymbol = Symbol.for("effect/annotation/TypeConstructor")
-      const typeConstructor = annotations[TypeConstructorSymbol]
-      if (typeConstructor && typeConstructor._tag === "effect/Option") {
-        return true
-      }
-    }
-  }
-  return false
 }
 
 /**
@@ -672,8 +660,10 @@ export function schemaToFields(
       const fieldSchema = S.make(field.type)
       let fieldType = toGraphQLTypeWithRegistry(fieldSchema, ctx)
 
-      // Make non-optional fields non-null (memoized)
-      if (!field.isOptional) {
+      // Make non-optional fields non-null, unless they're Option transformations
+      // Option transformations (like S.OptionFromNullOr) should always be nullable
+      const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
+      if (!field.isOptional && !isOptionField) {
         fieldType = getNonNull(fieldType)
       }
 
@@ -723,8 +713,10 @@ export function schemaToInputFields(
         cache
       )
 
-      // Make non-optional fields non-null (memoized)
-      if (!field.isOptional) {
+      // Make non-optional fields non-null, unless they're Option transformations
+      // Option transformations (like S.OptionFromNullOr) should always be nullable
+      const isOptionField = isOptionTransformation(field.type) || isOptionDeclaration(field.type)
+      if (!field.isOptional && !isOptionField) {
         fieldType = getNonNull(fieldType)
       }
 

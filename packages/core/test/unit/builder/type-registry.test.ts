@@ -332,6 +332,30 @@ describe("type-registry.ts", () => {
       expect(fields.name).toBeDefined()
     })
 
+    it("should handle Schema.Class with OptionFromNullOr fields as nullable", () => {
+      const ctx = createEmptyContext()
+      class User extends S.Class<User>("User")({
+        id: S.String,
+        name: S.String,
+        age: S.OptionFromNullOr(S.Int),
+        email: S.OptionFromNullOr(S.String),
+      }) {}
+
+      const fields = schemaToFields(User, ctx)
+      expect(fields.id).toBeDefined()
+      expect(fields.name).toBeDefined()
+      expect(fields.age).toBeDefined()
+      expect(fields.email).toBeDefined()
+
+      // Required fields should be NonNull
+      expect(isNonNullType(fields.id.type)).toBe(true)
+      expect(isNonNullType(fields.name.type)).toBe(true)
+
+      // OptionFromNullOr fields should be nullable (not wrapped in NonNull)
+      expect(isNonNullType(fields.age.type)).toBe(false)
+      expect(isNonNullType(fields.email.type)).toBe(false)
+    })
+
     it("should return empty object for non-TypeLiteral", () => {
       const ctx = createEmptyContext()
       const fields = schemaToFields(S.String, ctx)
@@ -393,6 +417,27 @@ describe("type-registry.ts", () => {
       const fields = schemaToInputFields(InputSchema, new Map(), new Map(), new Map(), new Map())
 
       expect(isNonNullType(fields.name.type)).toBe(false)
+    })
+
+    it("should handle OptionFromNullOr fields in input types as nullable", () => {
+      const InputSchema = S.Struct({
+        name: S.String,
+        age: S.OptionFromNullOr(S.Int),
+        email: S.OptionFromNullOr(S.String),
+      })
+
+      const fields = schemaToInputFields(InputSchema, new Map(), new Map(), new Map(), new Map())
+
+      expect(fields.name).toBeDefined()
+      expect(fields.age).toBeDefined()
+      expect(fields.email).toBeDefined()
+
+      // Required field should be NonNull
+      expect(isNonNullType(fields.name.type)).toBe(true)
+
+      // OptionFromNullOr fields should be nullable (not wrapped in NonNull)
+      expect(isNonNullType(fields.age.type)).toBe(false)
+      expect(isNonNullType(fields.email.type)).toBe(false)
     })
 
     it("should return empty object for non-TypeLiteral", () => {
