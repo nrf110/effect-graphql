@@ -669,8 +669,16 @@ export class GraphQLSchemaBuilder<R = never> implements Pipeable.Pipeable {
     const inputTypeLookupCache = buildInputTypeLookupCache(this.state.inputs, this.state.enums)
 
     // Phase 2: Build types that may reference inputs
-    const directiveRegistry = this.buildDirectiveRegistry(enumRegistry, inputRegistry, inputTypeLookupCache)
-    const interfaceRegistry = this.buildInterfaceRegistry(enumRegistry, inputRegistry, inputTypeLookupCache)
+    const directiveRegistry = this.buildDirectiveRegistry(
+      enumRegistry,
+      inputRegistry,
+      inputTypeLookupCache
+    )
+    const interfaceRegistry = this.buildInterfaceRegistry(
+      enumRegistry,
+      inputRegistry,
+      inputTypeLookupCache
+    )
     const { typeRegistry, unionRegistry } = this.buildTypeAndUnionRegistries(
       enumRegistry,
       interfaceRegistry,

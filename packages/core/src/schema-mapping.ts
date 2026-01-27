@@ -112,7 +112,7 @@ function handleTupleTypeAST(
  */
 function buildFieldsFromPropertySignatures(
   propertySignatures: readonly any[],
-  convertFn: (schema: S.Schema<any, any, any>) => GraphQLOutputType | GraphQLInputType,
+  convertFn: (schema: S.Schema<any, any, any>) => GraphQLOutputType | GraphQLInputType
 ): Record<string, { type: any }> {
   const fields: Record<string, { type: any }> = {}
 
@@ -291,10 +291,7 @@ export const toGraphQLInputType = (schema: S.Schema<any, any, any>): GraphQLInpu
 
   // Handle structs/objects as input types
   if (ast._tag === "TypeLiteral") {
-    const fields = buildFieldsFromPropertySignatures(
-      ast.propertySignatures,
-      toGraphQLInputType,
-    )
+    const fields = buildFieldsFromPropertySignatures(ast.propertySignatures, toGraphQLInputType)
 
     const typeName =
       (schema as any).annotations?.identifier || `Input_${Math.random().toString(36).slice(2, 11)}`

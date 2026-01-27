@@ -1349,13 +1349,16 @@ describe("type-registry.ts", () => {
 
       console.log("S.OptionFromSelf AST structure:")
       console.log("ast._tag:", ast._tag)
-      
+
       if (ast._tag === "Declaration") {
         console.log("It's a Declaration (not Transformation)")
         console.log("ast.typeParameters count:", ast.typeParameters?.length)
         if (ast.typeParameters?.[0]) {
           console.log("typeParameters[0]._tag:", ast.typeParameters[0]._tag)
-          console.log("typeParameters[0] === CursorFromHex.ast:", ast.typeParameters[0] === CursorFromHex.ast)
+          console.log(
+            "typeParameters[0] === CursorFromHex.ast:",
+            ast.typeParameters[0] === CursorFromHex.ast
+          )
         }
       } else if (ast._tag === "Transformation") {
         console.log("ast.from._tag:", ast.from?._tag)
@@ -1380,7 +1383,7 @@ describe("type-registry.ts", () => {
 
       console.log("S.Struct with S.optional AST structure:")
       console.log("ast._tag:", ast._tag)
-      
+
       if (ast._tag === "TypeLiteral") {
         const cursorProp = ast.propertySignatures?.find((p: any) => String(p.name) === "cursor")
         if (cursorProp) {
@@ -1412,11 +1415,11 @@ describe("type-registry.ts", () => {
       // Log the structure for debugging
       console.log("S.Option AST structure:")
       console.log("ast._tag:", ast._tag)
-      
+
       if (ast._tag === "Transformation") {
         console.log("ast.from._tag:", ast.from?._tag)
         console.log("ast.to._tag:", ast.to?._tag)
-        
+
         if (ast.from?._tag === "Union") {
           console.log("ast.from.types count:", ast.from.types?.length)
           for (let i = 0; i < ast.from.types?.length; i++) {
@@ -1425,17 +1428,25 @@ describe("type-registry.ts", () => {
             if (memberAst._tag === "TypeLiteral") {
               const props = memberAst.propertySignatures?.map((p: any) => String(p.name))
               console.log(`  member[${i}].properties:`, props)
-              const valueField = memberAst.propertySignatures?.find((p: any) => String(p.name) === "value")
+              const valueField = memberAst.propertySignatures?.find(
+                (p: any) => String(p.name) === "value"
+              )
               if (valueField) {
                 console.log(`  member[${i}].value.type._tag:`, valueField.type?._tag)
-                console.log(`  member[${i}].value.type === CursorFromHex.ast:`, valueField.type === CursorFromHex.ast)
+                console.log(
+                  `  member[${i}].value.type === CursorFromHex.ast:`,
+                  valueField.type === CursorFromHex.ast
+                )
                 // Check unwrapped forms
                 let unwrapped = CursorFromHex.ast as any
                 while (unwrapped._tag === "Transformation") {
                   console.log(`  CursorFromHex unwrapped to:`, unwrapped.to?._tag)
                   unwrapped = unwrapped.to
                 }
-                console.log(`  member[${i}].value.type === unwrapped CursorFromHex:`, valueField.type === unwrapped)
+                console.log(
+                  `  member[${i}].value.type === unwrapped CursorFromHex:`,
+                  valueField.type === unwrapped
+                )
               }
             }
           }

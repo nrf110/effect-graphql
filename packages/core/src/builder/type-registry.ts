@@ -362,9 +362,7 @@ function findRegisteredTypeForOptionSome(
 ): GraphQLObjectType | undefined {
   if (memberAst._tag !== "TypeLiteral") return undefined
 
-  const valueField = memberAst.propertySignatures?.find(
-    (p: any) => String(p.name) === "value"
-  )
+  const valueField = memberAst.propertySignatures?.find((p: any) => String(p.name) === "value")
   if (!valueField) return undefined
 
   const valueType = valueField.type
@@ -1009,7 +1007,14 @@ function handleOptionTransformationForInput(
     // Try various strategies to find registered input
     const registeredInput =
       findRegisteredInputForAST(memberAst, inputs, inputRegistry, enumRegistry, enums, cache) ||
-      findRegisteredInputForTransformation(memberAst, inputs, inputRegistry, enumRegistry, enums, cache) ||
+      findRegisteredInputForTransformation(
+        memberAst,
+        inputs,
+        inputRegistry,
+        enumRegistry,
+        enums,
+        cache
+      ) ||
       findRegisteredInputForOptionSome(memberAst, inputs, inputRegistry, enumRegistry, enums, cache)
 
     if (registeredInput) return registeredInput
@@ -1071,7 +1076,14 @@ function findRegisteredInputInUnionMembers(
     // Try various strategies to find registered input
     const registeredInput =
       findRegisteredInputForAST(memberAst, inputs, inputRegistry, enumRegistry, enums, cache) ||
-      findRegisteredInputForTransformation(memberAst, inputs, inputRegistry, enumRegistry, enums, cache) ||
+      findRegisteredInputForTransformation(
+        memberAst,
+        inputs,
+        inputRegistry,
+        enumRegistry,
+        enums,
+        cache
+      ) ||
       findRegisteredInputForOptionSome(memberAst, inputs, inputRegistry, enumRegistry, enums, cache)
 
     if (registeredInput) return registeredInput
