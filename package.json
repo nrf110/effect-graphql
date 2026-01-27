@@ -35,18 +35,18 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
-    "@types/node": "^25.0.9",
+    "@types/node": "^25.0.10",
     "tsx": "^4.19.0",
-    "@vitest/coverage-v8": "^4.0.17",
+    "@vitest/coverage-v8": "^4.0.18",
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import": "^2.32.0",
-    "prettier": "^3.8.0",
+    "prettier": "^3.8.1",
     "tsup": "^8.4.0",
-    "turbo": "^2.7.5",
+    "turbo": "^2.7.6",
     "typescript": "^5.3.0",
-    "typescript-eslint": "^8.53.0",
-    "vitest": "^4.0.17"
+    "typescript-eslint": "^8.54.0",
+    "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=18.0.0"
