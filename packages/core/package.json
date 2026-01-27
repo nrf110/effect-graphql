@@ -1,6 +1,6 @@
 {
   "name": "@effect-gql/core",
-  "version": "1.4.13",
+  "version": "1.4.14",
   "description": "Core GraphQL framework for Effect-TS - schema building, type mapping, and execution",
   "repository": {
     "url": "https://github.com/nrf110/effect-gql"
