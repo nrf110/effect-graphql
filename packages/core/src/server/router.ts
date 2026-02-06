@@ -6,7 +6,8 @@ import {
   HttpServerError,
   HttpBody,
 } from "@effect/platform"
-import { Cause, Context, Effect, Layer, ParseResult, Schema } from "effect"
+import { Cause, Context, Effect, Layer, ParseResult, Runtime, Schema } from "effect"
+import { GraphQLRequestContext } from "../context"
 import {
   GraphQLSchema,
   parse,
@@ -369,10 +370,11 @@ export const makeGraphQLRouter = <R>(
   // GraphQL POST handler - typed as returning HttpServerResponse with all errors handled
   const graphqlHandler = Effect.gen(function* () {
     const extensionsService = yield* makeExtensionsService()
-    const runtime = yield* Effect.runtime<R>()
 
-    // Parse request body
+    // Parse request body and extract headers
     const request = yield* HttpServerRequest.HttpServerRequest
+    // Headers type is a branded Record<string, string>, so we can cast it directly
+    const headers = request.headers as unknown as Record<string, string>
     const parsedBody = yield* decodeRequestBody(request)
     const body: GraphQLRequestBody = {
       query: parsedBody.query,
@@ -380,6 +382,20 @@ export const makeGraphQLRouter = <R>(
       operationName:
         parsedBody.operationName._tag === "Some" ? parsedBody.operationName.value : undefined,
     }
+
+    // Create request context with headers and parsed body
+    const requestContext: GraphQLRequestContext = {
+      request: {
+        headers,
+        query: body.query,
+        variables: body.variables,
+        operationName: body.operationName,
+      },
+    }
+
+    // Get runtime with user-provided layer, then add request context
+    const baseRuntime = yield* Effect.runtime<R>()
+    const runtime = baseRuntime.pipe(Runtime.provideService(GraphQLRequestContext, requestContext))
 
     // Phase 1: Parse
     const parseResult = yield* parseGraphQLQuery(body.query, extensionsService)

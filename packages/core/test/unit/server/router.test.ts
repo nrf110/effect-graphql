@@ -4,6 +4,7 @@ import * as S from "effect/Schema"
 import { HttpApp, HttpServerResponse } from "@effect/platform"
 import { GraphQLSchemaBuilder } from "../../../src/builder/schema-builder"
 import { makeGraphQLRouter, type ErrorHandler } from "../../../src/server/router"
+import { GraphQLRequestContext } from "../../../src/context"
 
 // Test service
 interface TestService {
@@ -23,7 +24,8 @@ const executeQuery = async <R>(
   config: Parameters<typeof makeGraphQLRouter>[2],
   query: string,
   variables?: Record<string, unknown>,
-  operationName?: string
+  operationName?: string,
+  headers?: Record<string, string>
 ) => {
   const router = makeGraphQLRouter(schema, layer, config)
   const { handler, dispose } = HttpApp.toWebHandlerLayer(router, Layer.empty)
@@ -32,7 +34,7 @@ const executeQuery = async <R>(
     const response = await handler(
       new Request(`http://localhost${config?.path ?? "/graphql"}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...headers },
         body: JSON.stringify({ query, variables, operationName }),
       })
     )
@@ -810,6 +812,131 @@ describe("router.ts", () => {
 
       expect(result.status).toBe(500)
       expect(result.body.errors).toBeDefined()
+    })
+  })
+
+  // ==========================================================================
+  // makeGraphQLRouter - GraphQLRequestContext integration
+  // ==========================================================================
+  describe("makeGraphQLRouter - GraphQLRequestContext integration", () => {
+    it("should automatically provide GraphQLRequestContext to resolvers", async () => {
+      const schema = GraphQLSchemaBuilder.empty
+        .query("getHeader", {
+          type: S.String,
+          args: S.Struct({ name: S.String }),
+          resolve: (args) =>
+            Effect.gen(function* () {
+              const ctx = yield* GraphQLRequestContext
+              return ctx.request.headers[args.name.toLowerCase()] ?? "not-found"
+            }),
+        })
+        .buildSchema()
+
+      const result = await executeQuery(
+        schema,
+        Layer.empty,
+        {},
+        'query { getHeader(name: "authorization") }',
+        undefined,
+        undefined,
+        { authorization: "Bearer test-token" }
+      )
+
+      expect(result).toEqual({ data: { getHeader: "Bearer test-token" } })
+    })
+
+    it("should provide query string in GraphQLRequestContext", async () => {
+      const schema = GraphQLSchemaBuilder.empty
+        .query("getQuery", {
+          type: S.String,
+          resolve: () =>
+            Effect.gen(function* () {
+              const ctx = yield* GraphQLRequestContext
+              return ctx.request.query
+            }),
+        })
+        .buildSchema()
+
+      const queryString = "{ getQuery }"
+      const result = await executeQuery(schema, Layer.empty, {}, queryString)
+
+      expect(result.data.getQuery).toBe(queryString)
+    })
+
+    it("should provide variables in GraphQLRequestContext", async () => {
+      const schema = GraphQLSchemaBuilder.empty
+        .query("getVariables", {
+          type: S.String,
+          args: S.Struct({ dummy: S.String }),
+          resolve: () =>
+            Effect.gen(function* () {
+              const ctx = yield* GraphQLRequestContext
+              return JSON.stringify(ctx.request.variables)
+            }),
+        })
+        .buildSchema()
+
+      const variables = { dummy: "value", extra: "data" }
+      const result = await executeQuery(
+        schema,
+        Layer.empty,
+        {},
+        "query Test($dummy: String!) { getVariables(dummy: $dummy) }",
+        variables
+      )
+
+      expect(JSON.parse(result.data.getVariables)).toEqual(variables)
+    })
+
+    it("should provide operationName in GraphQLRequestContext", async () => {
+      const schema = GraphQLSchemaBuilder.empty
+        .query("getOperationName", {
+          type: S.NullOr(S.String),
+          resolve: () =>
+            Effect.gen(function* () {
+              const ctx = yield* GraphQLRequestContext
+              return ctx.request.operationName ?? null
+            }),
+        })
+        .buildSchema()
+
+      const result = await executeQuery(
+        schema,
+        Layer.empty,
+        {},
+        "query MyOperation { getOperationName }",
+        undefined,
+        "MyOperation"
+      )
+
+      expect(result).toEqual({ data: { getOperationName: "MyOperation" } })
+    })
+
+    it("should work alongside user-provided services", async () => {
+      const schema = GraphQLSchemaBuilder.empty
+        .query("combined", {
+          type: S.String,
+          resolve: () =>
+            Effect.gen(function* () {
+              const ctx = yield* GraphQLRequestContext
+              const service = yield* TestService
+              const header = ctx.request.headers["x-custom"] ?? "no-header"
+              return `${service.getValue()}-${header}`
+            }),
+        })
+        .buildSchema()
+
+      const result = await executeQuery(
+        schema,
+        testLayer,
+        {},
+        "{ combined }",
+        undefined,
+        undefined,
+        { "x-custom": "custom-value" }
+      )
+
+      expect(result).toEqual({ data: { combined: "from-service-custom-value" } })
     })
   })
 
